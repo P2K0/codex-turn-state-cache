@@ -3,243 +3,140 @@ package turnstate
 import (
 	"context"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-func TestAfterAuthReplacesCallerStateWithOnlyMatchingCachedState(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
-	plugin := NewPlugin(NewCache(10, 10, func() time.Time { return now }))
-	key := CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex"}
-	if !plugin.cache.StoreResponse(key, []string{validState()}) {
-		t.Fatal("StoreResponse() = false, want true")
-	}
+func newTestPlugin(now func() time.Time) *Plugin {
+	return NewPlugin(NewCache(10, 10, now), nil)
+}
 
-	response, err := plugin.InterceptRequestAfterAuth(context.Background(), pluginapi.RequestInterceptRequest{
-		RequestID: "request-1",
+func afterAuth(requestID, authID, model string, headers http.Header) pluginapi.RequestInterceptRequest {
+	return pluginapi.RequestInterceptRequest{
+		RequestID: requestID,
 		ToFormat:  "codex",
-		Model:     key.Model,
-		Headers: http.Header{
-			"X-Codex-Turn-State": {strings.Repeat("caller", 60)},
-			"X-Other":            {"preserve"},
-		},
-		Metadata: map[string]any{"selected_auth_id": key.AuthID},
-	})
-	if err != nil {
-		t.Fatalf("InterceptRequestAfterAuth() error = %v", err)
-	}
-	if got := response.Headers.Values(TurnStateHeader); len(got) != 1 || got[0] != validState() {
-		t.Fatalf("injected state = %#v, want cached state", got)
-	}
-	if got := response.Headers.Get("X-Other"); got != "" {
-		t.Fatalf("response modified unrelated header = %q, want no value", got)
+		Model:     model,
+		Headers:   headers,
+		Metadata:  map[string]any{selectedAuthIDMetadataKey: authID},
 	}
 }
 
-func TestAfterAuthMissDoesNotInjectAndNeverUsesIP(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
-	plugin := NewPlugin(NewCache(10, 10, func() time.Time { return now }))
+func TestPluginReusesOnlyMatchingAuthAndModelAcrossIPs(t *testing.T) {
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	plugin := newTestPlugin(func() time.Time { return now })
+	cacheState := state("s")
+	callerState := state("c")
 
-	response, err := plugin.InterceptRequestAfterAuth(context.Background(), pluginapi.RequestInterceptRequest{
-		RequestID: "request-1",
-		ToFormat:  "codex",
-		Model:     "gpt-5.3-codex",
-		Headers: http.Header{
-			"x-codex-turn-state": {validState()},
-			"X-Forwarded-For":    {"198.51.100.1"},
-		},
-		Metadata: map[string]any{"selected_auth_id": "auth-a"},
-	})
+	if _, err := plugin.InterceptRequestAfterAuth(context.Background(), afterAuth("capture", "auth-a", "gpt-5.3-codex", http.Header{"X-Forwarded-For": {"198.51.100.10"}})); err != nil {
+		t.Fatalf("bind capture: %v", err)
+	}
+	if _, err := plugin.InterceptResponse(context.Background(), pluginapi.ResponseInterceptRequest{
+		RequestID:       "capture",
+		ResponseHeaders: http.Header{TurnStateHeader: {cacheState}},
+	}); err != nil {
+		t.Fatalf("capture response: %v", err)
+	}
+
+	response, err := plugin.InterceptRequestAfterAuth(context.Background(), afterAuth("reuse", "auth-a", "gpt-5.3-codex", http.Header{
+		TurnStateHeader:   {callerState},
+		"X-Forwarded-For": {"203.0.113.45"},
+	}))
 	if err != nil {
-		t.Fatalf("InterceptRequestAfterAuth() error = %v", err)
+		t.Fatalf("reuse: %v", err)
 	}
-	if got := response.Headers.Values(TurnStateHeader); len(got) != 0 {
-		t.Fatalf("miss injected caller state = %#v, want no state", got)
-	}
-	if _, ok := plugin.cache.Pending("request-1"); !ok {
-		t.Fatal("Pending() = miss, want binding independent of request IP headers")
-	}
-}
-
-func TestAfterAuthReusesSameKeyAcrossClientIPs(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
-	plugin := NewPlugin(NewCache(10, 10, func() time.Time { return now }))
-	key := CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex"}
-	state := validState()
-	if !plugin.cache.StoreResponse(key, []string{state}) {
-		t.Fatal("StoreResponse() = false, want true")
+	if got := response.Headers.Get(TurnStateHeader); got != cacheState {
+		t.Fatalf("cross-IP state = %q", got)
 	}
 
-	response, err := plugin.InterceptRequestAfterAuth(context.Background(), pluginapi.RequestInterceptRequest{
-		RequestID: "request-2",
-		ToFormat:  "codex",
-		Model:     key.Model,
-		Headers: http.Header{
-			"X-Forwarded-For": {"203.0.113.45"},
-		},
-		Metadata: map[string]any{"selected_auth_id": key.AuthID},
-	})
-	if err != nil {
-		t.Fatalf("InterceptRequestAfterAuth() error = %v", err)
-	}
-	if got := response.Headers.Get(TurnStateHeader); got != state {
-		t.Fatalf("cross-IP state = %q, want cached state", got)
-	}
-}
-
-func TestAfterAuthDoesNotReplaceForDifferentAuthOrModel(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
-	plugin := NewPlugin(NewCache(10, 10, func() time.Time { return now }))
-	state := validState()
-	if !plugin.cache.StoreResponse(CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex"}, []string{state}) {
-		t.Fatal("StoreResponse() = false, want true")
-	}
-
-	for _, tc := range []struct {
-		name string
-		key  CacheKey
-	}{
-		{name: "different auth", key: CacheKey{AuthID: "auth-b", Model: "gpt-5.3-codex"}},
-		{name: "different model", key: CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex-mini"}},
+	for _, request := range []pluginapi.RequestInterceptRequest{
+		afterAuth("other-auth", "auth-b", "gpt-5.3-codex", nil),
+		afterAuth("other-model", "auth-a", "gpt-5.3-codex-mini", nil),
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			response, err := plugin.InterceptRequestAfterAuth(context.Background(), pluginapi.RequestInterceptRequest{
-				RequestID: "request-" + tc.name,
-				ToFormat:  "codex",
-				Model:     tc.key.Model,
-				Metadata:  map[string]any{"selected_auth_id": tc.key.AuthID},
-			})
-			if err != nil {
-				t.Fatalf("InterceptRequestAfterAuth() error = %v", err)
-			}
-			if got := response.Headers.Get(TurnStateHeader); got != "" {
-				t.Fatalf("state = %q, want no replacement", got)
-			}
-		})
-	}
-}
-
-func TestCaptureResponseUsesPendingAfterAuthModelNotNormalizedResponseModel(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
-	plugin := NewPlugin(NewCache(10, 10, func() time.Time { return now }))
-	state := validState()
-	_, err := plugin.InterceptRequestAfterAuth(context.Background(), pluginapi.RequestInterceptRequest{
-		RequestID: "request-1",
-		ToFormat:  "codex",
-		Model:     "gpt-5.3-codex-mini",
-		Metadata:  map[string]any{"selected_auth_id": "auth-a"},
-	})
-	if err != nil {
-		t.Fatalf("InterceptRequestAfterAuth() error = %v", err)
-	}
-
-	_, err = plugin.InterceptResponse(context.Background(), pluginapi.ResponseInterceptRequest{
-		RequestID: "request-1",
-		Model:     "client-alias", // CPA response hooks can receive a normalized outer model.
-		ResponseHeaders: http.Header{
-			"X-Codex-Turn-State": {state},
-		},
-	})
-	if err != nil {
-		t.Fatalf("InterceptResponse() error = %v", err)
-	}
-	if got, ok := plugin.cache.Lookup(CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex-mini"}); !ok || got != state {
-		t.Fatalf("Lookup(after-auth key) = (%q, %t), want captured state", got, ok)
-	}
-	if got, ok := plugin.cache.Lookup(CacheKey{AuthID: "auth-a", Model: "client-alias"}); ok || got != "" {
-		t.Fatalf("Lookup(response model) = (%q, %t), want no state", got, ok)
-	}
-}
-
-func TestRetryCaptureUsesLatestAfterAuthBinding(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
-	plugin := NewPlugin(NewCache(10, 10, func() time.Time { return now }))
-	state := validState()
-
-	for _, key := range []CacheKey{
-		{AuthID: "auth-a", Model: "gpt-5.3-codex"},
-		{AuthID: "auth-b", Model: "gpt-5.3-codex-mini"},
-	} {
-		_, err := plugin.InterceptRequestAfterAuth(context.Background(), pluginapi.RequestInterceptRequest{
-			RequestID: "request-retry",
-			ToFormat:  "codex",
-			Model:     key.Model,
-			Metadata:  map[string]any{"selected_auth_id": key.AuthID},
-		})
+		response, err := plugin.InterceptRequestAfterAuth(context.Background(), request)
 		if err != nil {
-			t.Fatalf("InterceptRequestAfterAuth() error = %v", err)
+			t.Fatalf("isolation request: %v", err)
+		}
+		if got := response.Headers.Get(TurnStateHeader); got != "" {
+			t.Fatalf("isolated request received state %q", got)
 		}
 	}
+}
 
-	_, err := plugin.InterceptResponse(context.Background(), pluginapi.ResponseInterceptRequest{
-		RequestID:       "request-retry",
-		ResponseHeaders: http.Header{TurnStateHeader: {state}},
-	})
+func TestPluginCapturesAgainstAfterAuthModel(t *testing.T) {
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	plugin := newTestPlugin(func() time.Time { return now })
+	if _, err := plugin.InterceptRequestAfterAuth(context.Background(), afterAuth("capture", "auth-a", "gpt-5.3-codex", nil)); err != nil {
+		t.Fatalf("bind capture: %v", err)
+	}
+	if _, err := plugin.InterceptResponse(context.Background(), pluginapi.ResponseInterceptRequest{
+		RequestID:       "capture",
+		Model:           "normalized-client-alias",
+		ResponseHeaders: http.Header{TurnStateHeader: {state("s")}},
+	}); err != nil {
+		t.Fatalf("capture response: %v", err)
+	}
+
+	selected, err := plugin.InterceptRequestAfterAuth(context.Background(), afterAuth("selected", "auth-a", "gpt-5.3-codex", nil))
 	if err != nil {
-		t.Fatalf("InterceptResponse() error = %v", err)
+		t.Fatalf("selected model: %v", err)
 	}
-	if _, ok := plugin.cache.Lookup(CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex"}); ok {
-		t.Fatal("first retry binding received the final response state")
+	if got := selected.Headers.Get(TurnStateHeader); got != state("s") {
+		t.Fatalf("selected model state = %q", got)
 	}
-	if got, ok := plugin.cache.Lookup(CacheKey{AuthID: "auth-b", Model: "gpt-5.3-codex-mini"}); !ok || got != state {
-		t.Fatalf("latest retry binding = (%q, %t), want final state", got, ok)
+	alias, err := plugin.InterceptRequestAfterAuth(context.Background(), afterAuth("alias", "auth-a", "normalized-client-alias", nil))
+	if err != nil {
+		t.Fatalf("alias model: %v", err)
+	}
+	if got := alias.Headers.Get(TurnStateHeader); got != "" {
+		t.Fatalf("response model unexpectedly received state %q", got)
 	}
 }
 
-func TestStreamCaptureOnlyRunsAtHeaderInitialization(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
-	plugin := NewPlugin(NewCache(10, 10, func() time.Time { return now }))
-	state := validState()
-	_, err := plugin.InterceptRequestAfterAuth(context.Background(), pluginapi.RequestInterceptRequest{
-		RequestID: "request-1",
-		ToFormat:  "codex",
-		Model:     "gpt-5.3-codex",
-		Metadata:  map[string]any{"selected_auth_id": "auth-a"},
-	})
-	if err != nil {
-		t.Fatalf("InterceptRequestAfterAuth() error = %v", err)
+func TestPluginCapturesOnlyStreamHeaderInitAndDropsCompletedRequests(t *testing.T) {
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	plugin := newTestPlugin(func() time.Time { return now })
+	if _, err := plugin.InterceptRequestAfterAuth(context.Background(), afterAuth("stream", "auth-a", "gpt-stream", nil)); err != nil {
+		t.Fatalf("bind stream: %v", err)
 	}
-
-	_, err = plugin.InterceptStreamChunk(context.Background(), pluginapi.StreamChunkInterceptRequest{
-		RequestID:       "request-1",
+	if _, err := plugin.InterceptStreamChunk(context.Background(), pluginapi.StreamChunkInterceptRequest{
+		RequestID:       "stream",
 		ChunkIndex:      0,
-		ResponseHeaders: http.Header{"X-Codex-Turn-State": {state}},
-	})
-	if err != nil {
-		t.Fatalf("InterceptStreamChunk(payload) error = %v", err)
+		ResponseHeaders: http.Header{TurnStateHeader: {state("s")}},
+	}); err != nil {
+		t.Fatalf("capture payload chunk: %v", err)
 	}
-	if _, ok := plugin.cache.Lookup(CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex"}); ok {
-		t.Fatal("payload chunk stored state, want header-init only")
+	miss, err := plugin.InterceptRequestAfterAuth(context.Background(), afterAuth("payload-miss", "auth-a", "gpt-stream", nil))
+	if err != nil || miss.Headers.Get(TurnStateHeader) != "" {
+		t.Fatalf("payload chunk stored state: response=%#v error=%v", miss, err)
 	}
-
-	_, err = plugin.InterceptStreamChunk(context.Background(), pluginapi.StreamChunkInterceptRequest{
-		RequestID:       "request-1",
+	if _, err := plugin.InterceptStreamChunk(context.Background(), pluginapi.StreamChunkInterceptRequest{
+		RequestID:       "stream",
 		ChunkIndex:      pluginapi.StreamChunkHeaderInitIndex,
-		ResponseHeaders: http.Header{"X-Codex-Turn-State": {state}},
-	})
-	if err != nil {
-		t.Fatalf("InterceptStreamChunk(header-init) error = %v", err)
+		ResponseHeaders: http.Header{TurnStateHeader: {state("s")}},
+	}); err != nil {
+		t.Fatalf("capture header init: %v", err)
 	}
-	if got, ok := plugin.cache.Lookup(CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex"}); !ok || got != state {
-		t.Fatalf("Lookup() = (%q, %t), want captured state", got, ok)
+	hit, err := plugin.InterceptRequestAfterAuth(context.Background(), afterAuth("stream-hit", "auth-a", "gpt-stream", nil))
+	if err != nil || hit.Headers.Get(TurnStateHeader) != state("s") {
+		t.Fatalf("header init state: response=%#v error=%v", hit, err)
 	}
-}
 
-func TestCaptureResponseRequiresEarlierAfterAuthBinding(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
-	plugin := NewPlugin(NewCache(10, 10, func() time.Time { return now }))
-
-	_, err := plugin.InterceptResponse(context.Background(), pluginapi.ResponseInterceptRequest{
-		RequestID:       "unknown-request",
-		ResponseHeaders: http.Header{TurnStateHeader: {validState()}},
-	})
-	if err != nil {
-		t.Fatalf("InterceptResponse() error = %v", err)
+	if _, err := plugin.InterceptRequestAfterAuth(context.Background(), afterAuth("late", "auth-a", "gpt-late", nil)); err != nil {
+		t.Fatalf("bind late response: %v", err)
 	}
-	if _, ok := plugin.cache.Lookup(CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex"}); ok {
-		t.Fatal("response without after-auth context stored a state")
+	if err := plugin.HandleRequestComplete(context.Background(), pluginapi.RequestCompletion{RequestID: "late"}); err != nil {
+		t.Fatalf("complete request: %v", err)
+	}
+	if _, err := plugin.InterceptResponse(context.Background(), pluginapi.ResponseInterceptRequest{
+		RequestID:       "late",
+		ResponseHeaders: http.Header{TurnStateHeader: {state("l")}},
+	}); err != nil {
+		t.Fatalf("late response: %v", err)
+	}
+	late, err := plugin.InterceptRequestAfterAuth(context.Background(), afterAuth("late-hit", "auth-a", "gpt-late", nil))
+	if err != nil || late.Headers.Get(TurnStateHeader) != "" {
+		t.Fatalf("late response stored state: response=%#v error=%v", late, err)
 	}
 }

@@ -6,133 +6,84 @@ import (
 	"time"
 )
 
-func validState() string {
-	return strings.Repeat("s", StateLength)
+func state(value string) string {
+	return strings.Repeat(value, StateLength/len(value))
 }
 
-func validStateWith(value string) string {
-	return strings.Repeat(value, StateLength)
-}
-
-func TestCacheAcceptsOnlyOneExactLengthState(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
+func TestCacheAcceptsOnlyOne292ByteState(t *testing.T) {
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
 	cache := NewCache(10, 10, func() time.Time { return now })
 	key := CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex"}
+	valid := strings.Repeat("\xC3\xA9", StateLength/2)
+	cache.BindRequest("request", key)
 
-	if cache.StoreResponse(key, []string{validState()}) != true {
-		t.Fatal("StoreResponse() = false, want true for a single 292-byte state")
+	if gotKey, stored, replaced := cache.StoreResponseForRequest("request", []string{valid}); !stored || replaced || gotKey != key {
+		t.Fatalf("first write = (%+v, %t, %t)", gotKey, stored, replaced)
 	}
-	if got, ok := cache.Lookup(key); !ok || got != validState() {
-		t.Fatalf("Lookup() = (%q, %t), want valid cached state", got, ok)
-	}
-
 	for _, values := range [][]string{
 		nil,
 		{""},
 		{strings.Repeat("x", StateLength-1)},
 		{strings.Repeat("x", StateLength+1)},
-		{validState(), validState()},
+		{valid, valid},
 	} {
-		if cache.StoreResponse(key, values) {
-			t.Fatalf("StoreResponse(%d values) = true, want false", len(values))
+		if _, stored, _ := cache.StoreResponseForRequest("request", values); stored {
+			t.Fatalf("stored invalid header values: %#v", values)
 		}
-		if got, ok := cache.Lookup(key); !ok || got != validState() {
-			t.Fatalf("invalid input replaced valid entry: Lookup() = (%q, %t)", got, ok)
-		}
-	}
-}
-
-func TestCacheScopesStateByAuthAndExactModel(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
-	cache := NewCache(10, 10, func() time.Time { return now })
-	state := validState()
-	key := CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex"}
-
-	if !cache.StoreResponse(key, []string{state}) {
-		t.Fatal("StoreResponse() = false, want true")
-	}
-
-	for _, otherKey := range []CacheKey{
-		{AuthID: "auth-b", Model: "gpt-5.3-codex"},
-		{AuthID: "auth-a", Model: "gpt-5.3-codex-mini"},
-		{AuthID: "auth-a", Model: "GPT-5.3-CODEX"},
-	} {
-		if got, ok := cache.Lookup(otherKey); ok || got != "" {
-			t.Fatalf("Lookup(%+v) = (%q, %t), want cache miss", otherKey, got, ok)
+		if got, ok := cache.Lookup(key); !ok || got != valid {
+			t.Fatalf("invalid values replaced cache: (%q, %t)", got, ok)
 		}
 	}
 }
 
-func TestCacheExpiresExactlyOneHourWithoutSlidingRead(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
+func TestCacheReplacementHasFixedOneHourLifetime(t *testing.T) {
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
 	cache := NewCache(10, 10, func() time.Time { return now })
 	key := CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex"}
+	cache.BindRequest("request", key)
+	if _, stored, replaced := cache.StoreResponseForRequest("request", []string{state("a")}); !stored || replaced {
+		t.Fatalf("first write stored=%t replaced=%t", stored, replaced)
+	}
 
-	if !cache.StoreResponse(key, []string{validState()}) {
-		t.Fatal("StoreResponse() = false, want true")
-	}
-	now = now.Add(59*time.Minute + 59*time.Second)
-	if _, ok := cache.Lookup(key); !ok {
-		t.Fatal("Lookup() before fixed expiry = miss, want hit")
-	}
-	now = now.Add(time.Second)
-	if got, ok := cache.Lookup(key); ok || got != "" {
-		t.Fatalf("Lookup() at fixed expiry = (%q, %t), want miss", got, ok)
-	}
-}
-
-func TestCacheReplacesValidStateAndRestartsExpiryFromNewCapture(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
-	cache := NewCache(10, 10, func() time.Time { return now })
-	key := CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex"}
-	oldState := validStateWith("a")
-	newState := validStateWith("b")
-
-	if !cache.StoreResponse(key, []string{oldState}) {
-		t.Fatal("StoreResponse(old state) = false, want true")
-	}
 	now = now.Add(59 * time.Minute)
-	if !cache.StoreResponse(key, []string{newState}) {
-		t.Fatal("StoreResponse(new state) = false, want true")
+	if _, stored, replaced := cache.StoreResponseForRequest("request", []string{state("b")}); !stored || !replaced {
+		t.Fatalf("replacement stored=%t replaced=%t", stored, replaced)
 	}
-	if got, ok := cache.Lookup(key); !ok || got != newState {
-		t.Fatalf("Lookup() = (%q, %t), want replacement state", got, ok)
-	}
-
-	// This is after the old entry's fixed expiry but before the replacement expires.
 	now = now.Add(2 * time.Minute)
-	if got, ok := cache.Lookup(key); !ok || got != newState {
-		t.Fatalf("Lookup() after old expiry = (%q, %t), want fresh replacement", got, ok)
+	if got, ok := cache.Lookup(key); !ok || got != state("b") {
+		t.Fatalf("replacement after old expiry = (%q, %t)", got, ok)
 	}
 	now = now.Add(58 * time.Minute)
 	if got, ok := cache.Lookup(key); ok || got != "" {
-		t.Fatalf("Lookup() at replacement expiry = (%q, %t), want miss", got, ok)
+		t.Fatalf("replacement at fixed expiry = (%q, %t)", got, ok)
 	}
 }
 
-func TestCacheOverwritesPendingBindingForRetry(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
+func TestCacheUsesLatestBindingAndRejectsUnboundResponses(t *testing.T) {
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
 	cache := NewCache(10, 10, func() time.Time { return now })
+	first := CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex"}
+	last := CacheKey{AuthID: "auth-b", Model: "gpt-5.3-codex-mini"}
+	cache.BindRequest("retry", first)
+	cache.BindRequest("retry", last)
 
-	cache.BindRequest("request-1", CacheKey{AuthID: "auth-a", Model: "gpt-5.3-codex"})
-	cache.BindRequest("request-1", CacheKey{AuthID: "auth-b", Model: "gpt-5.3-codex-mini"})
-
-	if got, ok := cache.Pending("request-1"); !ok || got != (CacheKey{AuthID: "auth-b", Model: "gpt-5.3-codex-mini"}) {
-		t.Fatalf("Pending() = (%+v, %t), want latest retry binding", got, ok)
+	if gotKey, stored, _ := cache.StoreResponseForRequest("retry", []string{state("s")}); !stored || gotKey != last {
+		t.Fatalf("retry write = (%+v, %t)", gotKey, stored)
 	}
-	if !cache.StoreResponseForRequest("request-1", []string{validState()}) {
-		t.Fatal("StoreResponseForRequest() = false, want valid final retry capture")
+	if _, ok := cache.Lookup(first); ok {
+		t.Fatal("response was stored for the superseded binding")
 	}
-	if got, ok := cache.Lookup(CacheKey{AuthID: "auth-b", Model: "gpt-5.3-codex-mini"}); !ok || got != validState() {
-		t.Fatalf("Lookup(final retry key) = (%q, %t), want valid state", got, ok)
+	if got, ok := cache.Lookup(last); !ok || got != state("s") {
+		t.Fatalf("latest binding state = (%q, %t)", got, ok)
 	}
-}
+	if _, stored, _ := cache.StoreResponseForRequest("unknown", []string{state("u")}); stored {
+		t.Fatal("unbound response was stored")
+	}
 
-func TestCacheRejectsResponseWithoutAfterAuthBinding(t *testing.T) {
-	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
-	cache := NewCache(10, 10, func() time.Time { return now })
-
-	if cache.StoreResponseForRequest("unknown-request", []string{validState()}) {
-		t.Fatal("StoreResponseForRequest() = true without an after-auth binding")
+	late := CacheKey{AuthID: "auth-a", Model: "gpt-late"}
+	cache.BindRequest("late", late)
+	cache.ForgetRequest("late")
+	if _, stored, _ := cache.StoreResponseForRequest("late", []string{state("l")}); stored {
+		t.Fatal("response after completion was stored")
 	}
 }

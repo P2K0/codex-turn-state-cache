@@ -32,17 +32,50 @@ typedef struct {
 
 typedef int (*cliproxy_plugin_init_fn)(const cliproxy_host_api *, cliproxy_plugin_api *);
 
+static char last_host_log[4096];
+static int host_log_count;
+static int host_buffer_free_count;
+
+static int mock_host_call(void *ctx, const char *method, const uint8_t *request, size_t request_len, cliproxy_buffer *response) {
+    (void)ctx;
+    if (method == NULL || strcmp(method, "host.log") != 0 || request == NULL || request_len >= sizeof(last_host_log)) {
+        return 1;
+    }
+    memcpy(last_host_log, request, request_len);
+    last_host_log[request_len] = '\0';
+    host_log_count++;
+    if (response != NULL) {
+        response->ptr = malloc(1);
+        if (response->ptr == NULL) {
+            response->len = 0;
+            return 1;
+        }
+        response->len = 1;
+    }
+    return 0;
+}
+
+static void mock_host_free(void *ptr, size_t len) {
+    (void)len;
+    host_buffer_free_count++;
+    free(ptr);
+}
+
+static void reset_host_log(void) {
+    host_log_count = 0;
+    host_buffer_free_count = 0;
+    last_host_log[0] = '\0';
+}
+
 static int call_plugin(cliproxy_plugin_api *api, const char *method, const char *request, char **response) {
     cliproxy_buffer raw = {0};
-    size_t length = strlen(request);
-    int status = api->call((char *)method, (uint8_t *)request, length, &raw);
+    int status = api->call((char *)method, (uint8_t *)request, strlen(request), &raw);
     if (status != 0 || raw.ptr == NULL || raw.len == 0) {
         if (raw.ptr != NULL) {
             api->free_buffer(raw.ptr, raw.len);
         }
         return 0;
     }
-
     *response = calloc(raw.len + 1, 1);
     if (*response == NULL) {
         api->free_buffer(raw.ptr, raw.len);
@@ -69,7 +102,7 @@ static int expect_not_contains(const char *stage, const char *response, const ch
     return 0;
 }
 
-static int invoke_expect(cliproxy_plugin_api *api, const char *stage, const char *method, const char *request, const char *must_contain, const char *must_not_contain) {
+static int invoke(cliproxy_plugin_api *api, const char *stage, const char *method, const char *request, const char *must_contain, const char *must_not_contain) {
     char *response = NULL;
     int ok = call_plugin(api, method, request, &response);
     if (ok && must_contain != NULL) {
@@ -80,6 +113,14 @@ static int invoke_expect(cliproxy_plugin_api *api, const char *stage, const char
     }
     free(response);
     return ok;
+}
+
+static int expect_log(const char *stage, const char *must_contain, const char *must_not_contain) {
+    if (host_log_count == 1 && host_buffer_free_count == 1 && expect_contains(stage, last_host_log, must_contain) && expect_not_contains(stage, last_host_log, must_not_contain)) {
+        return 1;
+    }
+    fprintf(stderr, "ABI host log failed at %s\n", stage);
+    return 0;
 }
 
 static void make_state(char state[293], char value) {
@@ -105,9 +146,9 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    cliproxy_host_api host = { .abi_version = 1 };
+    cliproxy_host_api host = {.abi_version = 1, .call = mock_host_call, .free_buffer = mock_host_free};
     cliproxy_plugin_api api = {0};
-    if (init(&host, &api) != 0 || api.abi_version != 1 || api.call == NULL || api.free_buffer == NULL) {
+    if (init(&host, &api) != 0 || api.abi_version != 1 || api.call == NULL || api.free_buffer == NULL || api.shutdown == NULL) {
         fprintf(stderr, "invalid plugin ABI table\n");
         dlclose(handle);
         return 1;
@@ -121,35 +162,41 @@ int main(int argc, char **argv) {
     make_state(state_b, 'b');
     make_state(state_stream, 's');
 
-    int ok = 1;
-    ok = ok && invoke_expect(&api, "register", "plugin.register", "{\"schema_version\":6,\"config_yaml\":\"\"}", "\"ok\":true", NULL);
-    ok = ok && invoke_expect(&api, "bind first request", "request.intercept_after", "{\"RequestID\":\"capture\",\"ToFormat\":\"codex\",\"Model\":\"model-a\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", "\"ok\":true", state_a);
+    int ok = invoke(&api, "register", "plugin.register", "{\"schema_version\":6,\"config_yaml\":\"\"}", "\"ok\":true", NULL);
+    ok = ok && invoke(&api, "bind", "request.intercept_after", "{\"RequestID\":\"capture\",\"ToFormat\":\"codex\",\"Model\":\"model-a\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", "\"ok\":true", state_a);
 
-    snprintf(request, sizeof(request), "{\"RequestID\":\"capture\",\"ResponseHeaders\":{\"X-Codex-Turn-State\":[\"%s\"]}}", state_a);
-    ok = ok && invoke_expect(&api, "capture first state", "response.intercept_after", request, "\"ok\":true", NULL);
+    reset_host_log();
+    snprintf(request, sizeof(request), "{\"RequestID\":\"capture\",\"ResponseHeaders\":{\"X-Codex-Turn-State\":[\"%s\"]},\"host_callback_id\":\"callback-capture\"}", state_a);
+    ok = ok && invoke(&api, "capture", "response.intercept_after", request, "\"ok\":true", NULL);
+    ok = ok && expect_log("capture log", "callback-capture", state_a);
+    ok = ok && expect_not_contains("capture auth", last_host_log, "auth-a");
 
-    ok = ok && invoke_expect(&api, "same key cross ip", "request.intercept_after", "{\"RequestID\":\"cross-ip\",\"ToFormat\":\"codex\",\"Model\":\"model-a\",\"Headers\":{\"X-Forwarded-For\":[\"203.0.113.10\"]},\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", state_a, NULL);
-    ok = ok && invoke_expect(&api, "different auth miss", "request.intercept_after", "{\"RequestID\":\"other-auth\",\"ToFormat\":\"codex\",\"Model\":\"model-a\",\"Metadata\":{\"selected_auth_id\":\"auth-b\"}}", "\"ok\":true", state_a);
-    ok = ok && invoke_expect(&api, "different model miss", "request.intercept_after", "{\"RequestID\":\"other-model\",\"ToFormat\":\"codex\",\"Model\":\"model-b\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", "\"ok\":true", state_a);
+    reset_host_log();
+    ok = ok && invoke(&api, "cross ip", "request.intercept_after", "{\"RequestID\":\"cross-ip\",\"ToFormat\":\"codex\",\"Model\":\"model-a\",\"Headers\":{\"X-Forwarded-For\":[\"203.0.113.10\"]},\"Metadata\":{\"selected_auth_id\":\"auth-a\"},\"host_callback_id\":\"callback-injected\"}", state_a, NULL);
+    ok = ok && expect_log("injection log", "codex turn-state cache injected", state_a);
+    ok = ok && invoke(&api, "different auth", "request.intercept_after", "{\"RequestID\":\"other-auth\",\"ToFormat\":\"codex\",\"Model\":\"model-a\",\"Metadata\":{\"selected_auth_id\":\"auth-b\"}}", "\"ok\":true", state_a);
+    ok = ok && invoke(&api, "different model", "request.intercept_after", "{\"RequestID\":\"other-model\",\"ToFormat\":\"codex\",\"Model\":\"model-b\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", "\"ok\":true", state_a);
 
+    reset_host_log();
     snprintf(request, sizeof(request), "{\"RequestID\":\"capture\",\"ResponseHeaders\":{\"X-Codex-Turn-State\":[\"%s\"]}}", state_b);
-    ok = ok && invoke_expect(&api, "replace state", "response.intercept_after", request, "\"ok\":true", NULL);
-    ok = ok && invoke_expect(&api, "replacement hit", "request.intercept_after", "{\"RequestID\":\"replacement\",\"ToFormat\":\"codex\",\"Model\":\"model-a\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", state_b, state_a);
+    ok = ok && invoke(&api, "replace", "response.intercept_after", request, "\"ok\":true", NULL);
+    ok = ok && expect_log("replace log", "replaced=true", state_b);
+    ok = ok && invoke(&api, "replacement hit", "request.intercept_after", "{\"RequestID\":\"replacement\",\"ToFormat\":\"codex\",\"Model\":\"model-a\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", state_b, state_a);
 
-    ok = ok && invoke_expect(&api, "bind stream", "request.intercept_after", "{\"RequestID\":\"stream\",\"ToFormat\":\"codex\",\"Model\":\"model-stream\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", "\"ok\":true", NULL);
+    ok = ok && invoke(&api, "bind stream", "request.intercept_after", "{\"RequestID\":\"stream\",\"ToFormat\":\"codex\",\"Model\":\"model-stream\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", "\"ok\":true", NULL);
+    reset_host_log();
     snprintf(request, sizeof(request), "{\"RequestID\":\"stream\",\"ChunkIndex\":-1,\"ResponseHeaders\":{\"X-Codex-Turn-State\":[\"%s\"]}}", state_stream);
-    ok = ok && invoke_expect(&api, "capture stream header", "response.intercept_stream_chunk", request, "\"ok\":true", NULL);
-    ok = ok && invoke_expect(&api, "stream state hit", "request.intercept_after", "{\"RequestID\":\"stream-hit\",\"ToFormat\":\"codex\",\"Model\":\"model-stream\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", state_stream, NULL);
+    ok = ok && invoke(&api, "stream header", "response.intercept_stream_chunk", request, "\"ok\":true", NULL);
+    ok = ok && expect_log("stream log", "source=stream", state_stream);
+    ok = ok && invoke(&api, "stream hit", "request.intercept_after", "{\"RequestID\":\"stream-hit\",\"ToFormat\":\"codex\",\"Model\":\"model-stream\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", state_stream, NULL);
 
-    ok = ok && invoke_expect(&api, "bind late response", "request.intercept_after", "{\"RequestID\":\"late\",\"ToFormat\":\"codex\",\"Model\":\"model-late\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", "\"ok\":true", NULL);
-    ok = ok && invoke_expect(&api, "complete request", "request.complete", "{\"RequestID\":\"late\"}", "\"ok\":true", NULL);
+    ok = ok && invoke(&api, "bind late", "request.intercept_after", "{\"RequestID\":\"late\",\"ToFormat\":\"codex\",\"Model\":\"model-late\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", "\"ok\":true", NULL);
+    ok = ok && invoke(&api, "complete", "request.complete", "{\"RequestID\":\"late\"}", "\"ok\":true", NULL);
     snprintf(request, sizeof(request), "{\"RequestID\":\"late\",\"ResponseHeaders\":{\"X-Codex-Turn-State\":[\"%s\"]}}", state_a);
-    ok = ok && invoke_expect(&api, "late response ignored", "response.intercept_after", request, "\"ok\":true", NULL);
-    ok = ok && invoke_expect(&api, "late state miss", "request.intercept_after", "{\"RequestID\":\"late-hit\",\"ToFormat\":\"codex\",\"Model\":\"model-late\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", "\"ok\":true", state_a);
+    ok = ok && invoke(&api, "late response", "response.intercept_after", request, "\"ok\":true", NULL);
+    ok = ok && invoke(&api, "late miss", "request.intercept_after", "{\"RequestID\":\"late-hit\",\"ToFormat\":\"codex\",\"Model\":\"model-late\",\"Metadata\":{\"selected_auth_id\":\"auth-a\"}}", "\"ok\":true", state_a);
 
-    if (api.shutdown != NULL) {
-        api.shutdown();
-    }
+    api.shutdown();
     dlclose(handle);
     if (!ok) {
         return 1;

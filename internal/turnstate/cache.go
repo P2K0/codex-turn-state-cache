@@ -6,16 +6,14 @@ import (
 )
 
 const (
-	// TurnStateHeader is the only response/request header managed by this plugin.
 	TurnStateHeader = "X-Codex-Turn-State"
-	// StateLength is the exact raw byte length accepted from an upstream response.
-	StateLength = 292
+	StateLength     = 292
 
 	stateTTL   = time.Hour
 	pendingTTL = 2 * time.Hour
 )
 
-// CacheKey scopes a state to the exact CPA-selected credential record and model.
+// CacheKey scopes state to the exact CPA-selected credential and model.
 type CacheKey struct {
 	AuthID string
 	Model  string
@@ -33,7 +31,6 @@ type pendingBinding struct {
 	expiresAt time.Time
 }
 
-// Cache holds process-local state and per-request correlations. It never persists data.
 type Cache struct {
 	mu                sync.Mutex
 	now               func() time.Time
@@ -43,7 +40,6 @@ type Cache struct {
 	pending           map[string]pendingBinding
 }
 
-// NewCache returns a bounded, process-local state cache.
 func NewCache(maxEntries, maxPendingEntries int, now func() time.Time) *Cache {
 	if maxEntries < 1 {
 		maxEntries = 1
@@ -63,10 +59,9 @@ func NewCache(maxEntries, maxPendingEntries int, now func() time.Time) *Cache {
 	}
 }
 
-// BindRequest associates a request ID with the trusted after-auth cache key.
-// A retry for the same request ID deliberately overwrites the earlier selection.
+// BindRequest associates a request ID with the trusted after-auth key.
 func (c *Cache) BindRequest(requestID string, key CacheKey) {
-	if c == nil || requestID == "" {
+	if requestID == "" {
 		return
 	}
 	c.mu.Lock()
@@ -87,9 +82,8 @@ func (c *Cache) BindRequest(requestID string, key CacheKey) {
 	}
 }
 
-// ForgetRequest drops request-local state after completion or an incomplete hook context.
 func (c *Cache) ForgetRequest(requestID string) {
-	if c == nil || requestID == "" {
+	if requestID == "" {
 		return
 	}
 	c.mu.Lock()
@@ -97,25 +91,9 @@ func (c *Cache) ForgetRequest(requestID string) {
 	delete(c.pending, requestID)
 }
 
-// Pending returns the trusted after-auth association for one outstanding request.
-func (c *Cache) Pending(requestID string) (CacheKey, bool) {
-	if c == nil || requestID == "" {
-		return CacheKey{}, false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	now := c.now()
-	c.purgeExpiredLocked(now)
-	binding, ok := c.pending[requestID]
-	if !ok {
-		return CacheKey{}, false
-	}
-	return binding.key, true
-}
-
-// Lookup returns a state only while its fixed capture-time lifetime is valid.
+// Lookup returns a state only while its capture-time lifetime is valid.
 func (c *Cache) Lookup(key CacheKey) (string, bool) {
-	if c == nil || !validKey(key) {
+	if !validKey(key) {
 		return "", false
 	}
 	c.mu.Lock()
@@ -129,31 +107,14 @@ func (c *Cache) Lookup(key CacheKey) (string, bool) {
 	return entry.value, true
 }
 
-// StoreResponse validates and stores a response value for an already-known cache key.
-func (c *Cache) StoreResponse(key CacheKey, values []string) bool {
-	if c == nil || !validKey(key) {
-		return false
+// StoreResponseForRequest writes a valid state for the request's after-auth key.
+func (c *Cache) StoreResponseForRequest(requestID string, values []string) (key CacheKey, stored, replaced bool) {
+	if requestID == "" {
+		return CacheKey{}, false, false
 	}
 	value, ok := validStateValue(values)
 	if !ok {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	now := c.now()
-	c.purgeExpiredLocked(now)
-	c.storeLocked(key, value, now)
-	return true
-}
-
-// StoreResponseForRequest stores against the trusted key bound during after-auth.
-func (c *Cache) StoreResponseForRequest(requestID string, values []string) bool {
-	if c == nil || requestID == "" {
-		return false
-	}
-	value, ok := validStateValue(values)
-	if !ok {
-		return false
+		return CacheKey{}, false, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -161,14 +122,14 @@ func (c *Cache) StoreResponseForRequest(requestID string, values []string) bool 
 	c.purgeExpiredLocked(now)
 	binding, ok := c.pending[requestID]
 	if !ok {
-		return false
+		return CacheKey{}, false, false
 	}
-	c.storeLocked(binding.key, value, now)
-	return true
+	return binding.key, true, c.storeLocked(binding.key, value, now)
 }
 
-func (c *Cache) storeLocked(key CacheKey, value string, now time.Time) {
-	if _, exists := c.entries[key]; !exists {
+func (c *Cache) storeLocked(key CacheKey, value string, now time.Time) bool {
+	_, replaced := c.entries[key]
+	if !replaced {
 		c.evictEntriesLocked()
 	}
 	c.entries[key] = stateEntry{
@@ -176,6 +137,7 @@ func (c *Cache) storeLocked(key CacheKey, value string, now time.Time) {
 		capturedAt: now,
 		expiresAt:  now.Add(stateTTL),
 	}
+	return replaced
 }
 
 func (c *Cache) purgeExpiredLocked(now time.Time) {
@@ -228,7 +190,7 @@ func validKey(key CacheKey) bool {
 }
 
 func validStateValue(values []string) (string, bool) {
-	if len(values) != 1 || values[0] == "" || len([]byte(values[0])) != StateLength {
+	if len(values) != 1 || len(values[0]) != StateLength {
 		return "", false
 	}
 	return values[0], true

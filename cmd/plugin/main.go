@@ -9,11 +9,14 @@ typedef struct {
 	size_t len;
 } cliproxy_buffer;
 
+typedef int (*cliproxy_host_call_fn)(void*, const char*, const uint8_t*, size_t, cliproxy_buffer*);
+typedef void (*cliproxy_host_free_fn)(void*, size_t);
+
 typedef struct {
 	uint32_t abi_version;
 	void* host_ctx;
-	void* call;
-	void* free_buffer;
+	cliproxy_host_call_fn call;
+	cliproxy_host_free_fn free_buffer;
 } cliproxy_host_api;
 
 typedef int (*cliproxy_plugin_call_fn)(char*, uint8_t*, size_t, cliproxy_buffer*);
@@ -30,6 +33,29 @@ typedef struct {
 extern int cliproxyPluginCall(char*, uint8_t*, size_t, cliproxy_buffer*);
 extern void cliproxyPluginFree(void*, size_t);
 extern void cliproxyPluginShutdown(void);
+
+static const cliproxy_host_api* stored_host;
+
+static void store_host_api(const cliproxy_host_api* host) {
+	stored_host = host;
+}
+
+static void clear_host_api(void) {
+	stored_host = NULL;
+}
+
+static int call_host_api(const char* method, const uint8_t* request, size_t request_len, cliproxy_buffer* response) {
+	if (stored_host == NULL || stored_host->call == NULL) {
+		return 1;
+	}
+	return stored_host->call(stored_host->host_ctx, method, request, request_len, response);
+}
+
+static void free_host_buffer(void* ptr, size_t len) {
+	if (stored_host != NULL && stored_host->free_buffer != NULL && ptr != NULL) {
+		stored_host->free_buffer(ptr, len);
+	}
+}
 */
 import "C"
 
@@ -40,15 +66,17 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/5345asda/codex-turn-state-cache/internal/turnstate"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
-	"github.com/tao/cpa-plugin-codex-turn-state/internal/turnstate"
 	"gopkg.in/yaml.v3"
 )
 
 const (
 	defaultMaxEntries        = 10_000
 	defaultMaxPendingEntries = 20_000
+	pluginID                 = "codex-turn-state-cache"
+	pluginVersion            = "0.1.2"
 )
 
 var runtime = pluginRuntime{
@@ -73,6 +101,33 @@ type lifecycleRequest struct {
 	SchemaVersion uint32 `json:"schema_version"`
 }
 
+type requestInterceptRPC struct {
+	pluginapi.RequestInterceptRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
+type responseInterceptRPC struct {
+	pluginapi.ResponseInterceptRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
+type streamChunkInterceptRPC struct {
+	pluginapi.StreamChunkInterceptRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
+type hostLogRequest struct {
+	HostCallbackID string        `json:"host_callback_id,omitempty"`
+	Level          string        `json:"level,omitempty"`
+	Message        string        `json:"message,omitempty"`
+	Fields         hostLogFields `json:"fields"`
+}
+
+type hostLogFields struct {
+	PluginID string `json:"plugin_id"`
+	Model    string `json:"model"`
+}
+
 type registration struct {
 	SchemaVersion uint32                   `json:"schema_version"`
 	Metadata      pluginapi.Metadata       `json:"metadata"`
@@ -89,10 +144,11 @@ type registrationCapabilities struct {
 func main() {}
 
 //export cliproxy_plugin_init
-func cliproxy_plugin_init(_ *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
+func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
 	if plugin == nil {
 		return 1
 	}
+	C.store_host_api(host)
 	plugin.abi_version = C.uint32_t(pluginabi.ABIVersion)
 	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
 	plugin.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
@@ -135,6 +191,7 @@ func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
 //export cliproxyPluginShutdown
 func cliproxyPluginShutdown() {
 	resetRuntime()
+	C.clear_host_api()
 }
 
 func handleMethod(method string, raw []byte) ([]byte, error) {
@@ -191,7 +248,10 @@ func configure(raw []byte) error {
 }
 
 func newPlugin(cfg pluginConfig) *turnstate.Plugin {
-	return turnstate.NewPlugin(turnstate.NewCache(cfg.MaxEntries, cfg.MaxPendingEntries, nil))
+	return turnstate.NewPlugin(
+		turnstate.NewCache(cfg.MaxEntries, cfg.MaxPendingEntries, nil),
+		logTurnState,
+	)
 }
 
 func resetRuntime() {
@@ -213,10 +273,10 @@ func pluginRegistration() registration {
 	return registration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
-			Name:             "codex-turn-state-cache",
-			Version:          "0.1.0",
-			Author:           "tao",
-			GitHubRepository: "https://github.com/tao/cpa-plugin-codex-turn-state",
+			Name:             pluginID,
+			Version:          pluginVersion,
+			Author:           "5345asda",
+			GitHubRepository: "https://github.com/5345asda/codex-turn-state-cache",
 			ConfigFields: []pluginapi.ConfigField{
 				{
 					Name:        "max_entries",
@@ -252,11 +312,11 @@ func interceptRequestBeforeAuth(raw []byte) ([]byte, error) {
 }
 
 func interceptRequestAfterAuth(raw []byte) ([]byte, error) {
-	var request pluginapi.RequestInterceptRequest
+	var request requestInterceptRPC
 	if errUnmarshal := json.Unmarshal(raw, &request); errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
-	response, errIntercept := currentPlugin().InterceptRequestAfterAuth(context.Background(), request)
+	response, errIntercept := currentPlugin().InterceptRequestAfterAuth(contextWithHostCallbackID(request.HostCallbackID), request.RequestInterceptRequest)
 	if errIntercept != nil {
 		return nil, errIntercept
 	}
@@ -264,11 +324,11 @@ func interceptRequestAfterAuth(raw []byte) ([]byte, error) {
 }
 
 func interceptResponse(raw []byte) ([]byte, error) {
-	var request pluginapi.ResponseInterceptRequest
+	var request responseInterceptRPC
 	if errUnmarshal := json.Unmarshal(raw, &request); errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
-	response, errIntercept := currentPlugin().InterceptResponse(context.Background(), request)
+	response, errIntercept := currentPlugin().InterceptResponse(contextWithHostCallbackID(request.HostCallbackID), request.ResponseInterceptRequest)
 	if errIntercept != nil {
 		return nil, errIntercept
 	}
@@ -276,11 +336,11 @@ func interceptResponse(raw []byte) ([]byte, error) {
 }
 
 func interceptStreamChunk(raw []byte) ([]byte, error) {
-	var request pluginapi.StreamChunkInterceptRequest
+	var request streamChunkInterceptRPC
 	if errUnmarshal := json.Unmarshal(raw, &request); errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
-	response, errIntercept := currentPlugin().InterceptStreamChunk(context.Background(), request)
+	response, errIntercept := currentPlugin().InterceptStreamChunk(contextWithHostCallbackID(request.HostCallbackID), request.StreamChunkInterceptRequest)
 	if errIntercept != nil {
 		return nil, errIntercept
 	}
@@ -327,4 +387,42 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	}
 	response.ptr = ptr
 	response.len = C.size_t(len(raw))
+}
+
+type hostCallbackIDKey struct{}
+
+func contextWithHostCallbackID(callbackID string) context.Context {
+	return context.WithValue(context.Background(), hostCallbackIDKey{}, callbackID)
+}
+
+func logTurnState(ctx context.Context, message, model string) {
+	payload, _ := json.Marshal(hostLogRequest{
+		HostCallbackID: hostCallbackID(ctx),
+		Level:          "info",
+		Message:        message,
+		Fields: hostLogFields{
+			PluginID: pluginID,
+			Model:    model,
+		},
+	})
+	callHostLog(payload)
+}
+
+func hostCallbackID(ctx context.Context) string {
+	callbackID, _ := ctx.Value(hostCallbackIDKey{}).(string)
+	return callbackID
+}
+
+func callHostLog(payload []byte) {
+	cMethod := C.CString(pluginabi.MethodHostLog)
+	defer C.free(unsafe.Pointer(cMethod))
+	var request *C.uint8_t
+	if len(payload) > 0 {
+		request = (*C.uint8_t)(C.CBytes(payload))
+		defer C.free(unsafe.Pointer(request))
+	}
+	var response C.cliproxy_buffer
+	if C.call_host_api(cMethod, request, C.size_t(len(payload)), &response) == 0 && response.ptr != nil {
+		C.free_host_buffer(response.ptr, response.len)
+	}
 }

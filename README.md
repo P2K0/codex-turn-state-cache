@@ -1,34 +1,40 @@
-# CPA Codex Turn State Cache
+# Codex Turn-State Cache
 
-Native CLIProxyAPI v7.3.4 plugin for reusing a qualifying
-`X-Codex-Turn-State` response header on later Codex upstream requests.
+Native CLIProxyAPI plugin that reuses a qualifying upstream
+`X-Codex-Turn-State` header on later Codex requests.
 
 ## Behavior
 
-- The plugin accepts exactly one response header value with raw byte length `292`.
-- The cache key is the CPA-selected `selected_auth_id` plus the exact after-auth
-  model string. Client IP and forwarded IP are not part of the key.
-- A later valid value for the same key replaces the previous value and sets a
-  new fixed one-hour expiration.
-- Invalid values, missing request correlation, a different auth record, or a
-  different model do not create or replace an entry.
-- On a cache hit, the plugin returns one replacement
-  `X-Codex-Turn-State` request header. On a miss, it returns no header change.
-- State is process-local only and is discarded on reconfiguration, plugin
-  quiesce, or CPA restart.
+- Accepts exactly one upstream header value whose raw byte length is `292`.
+- Keys state by CPA's selected account and the exact after-auth model.
+- Reuses a matching account/model state across client or egress IP changes.
+- Replaces a prior valid value for the same key and gives the new value a fixed
+  one-hour lifetime. Reads do not extend that lifetime.
+- Captures HTTP responses and stream header initialization. A completed request
+  cannot later populate the cache.
+- Keeps state only in process memory. Reconfiguration, quiesce, unload, and
+  CPA restart clear it.
 
-HTTP responses and HTTP stream header-initialization events are supported.
-WebSocket response payloads are intentionally out of scope.
+Successful captures and injections use CPA's native `host.log` callback. Logs
+include the plugin ID, model, and one of the following messages, but never a
+state value, account ID, IP, request header, or body:
+
+```text
+codex turn-state cache captured source=http
+codex turn-state cache captured source=stream
+codex turn-state cache captured source=<http|stream> replaced=true
+codex turn-state cache injected
+```
 
 ## CPA Configuration
 
-Place the Linux/amd64 shared library at:
+Install from the CPA plugin store, or place the Linux/amd64 library at:
 
 ```text
-/CLIProxyAPI/plugins/linux/amd64/codex-turn-state-cache-v0.1.0.so
+/CLIProxyAPI/plugins/linux/amd64/codex-turn-state-cache-v0.1.2.so
 ```
 
-Enable it in the CPA configuration:
+Then enable it in CPA configuration:
 
 ```yaml
 plugins:
@@ -42,13 +48,12 @@ plugins:
       max_pending_entries: 20000
 ```
 
-`max_entries` and `max_pending_entries` are optional. The 292-byte validation
-and one-hour TTL are fixed by the plugin.
+`max_entries` and `max_pending_entries` are optional. The state length and
+one-hour lifetime are fixed.
 
 ## Build
 
-The target CPA runtime is Linux/amd64. Build the shared library locally or in
-CI, not on the production server.
+Build the Linux/amd64 shared library locally or in CI, not on the CPA host.
 
 ```powershell
 $zig = 'C:\path\to\zig.exe'
@@ -61,18 +66,12 @@ $env:GOOS = 'linux'
 $env:GOARCH = 'amd64'
 $env:CC = "$zig cc -target x86_64-linux-gnu.2.17"
 go build -trimpath -buildmode=c-shared `
-  -o dist/codex-turn-state-cache-v0.1.0.so ./cmd/plugin
+  -o dist/codex-turn-state-cache-v0.1.2.so ./cmd/plugin
 ```
 
-Verify the required native entry point before deployment:
+## Release Asset
 
-```powershell
-go tool nm dist/codex-turn-state-cache-v0.1.0.so |
-  Select-String 'cliproxy_plugin_init'
-```
-
-## Rollback
-
-Disable the `codex-turn-state-cache` plugin configuration and remove its
-read-only plugin-directory mount, then recreate only the CPA application
-service. Do not change the tunnel, published port, or authentication directory.
+The GitHub Release supports Linux/amd64 only. Its zip asset is named
+`codex-turn-state-cache_0.1.2_linux_amd64.zip`, contains only
+`codex-turn-state-cache.so` at the archive root, and is verified by the
+adjacent `checksums.txt` file.
