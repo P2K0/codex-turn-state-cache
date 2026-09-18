@@ -75,3 +75,7 @@ The GitHub Release supports Linux/amd64 only. Its zip asset is named
 `codex-turn-state-cache_0.1.2_linux_amd64.zip`, contains only
 `codex-turn-state-cache.so` at the archive root, and is verified by the
 adjacent `checksums.txt` file.
+
+## Related Links
+
+- [LINUX DO](https://linux.do/) — 新的理想型社区
