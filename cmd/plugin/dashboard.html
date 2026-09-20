@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>cpa-plugin-codex-turn-state</title>
+<style>
+:root {
+  --bg: #ffffff;
+  --fg: #0f172a;
+  --muted: #475569;
+  --faint: #94a3b8;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --card: #f8fafc;
+  --raised: #ffffff;
+  --row-alt: #fbfcfe;
+  --ok: #15803d;
+  --ok-bg: #e7f5ec;
+  --warn: #b45309;
+  --warn-bg: #fff3df;
+  --bad: #b91c1c;
+  --bad-bg: #fdecea;
+  --accent: #1d4ed8;
+  --accent-bg: #e8f0fe;
+  --shadow: 0 1px 3px rgba(15,23,42,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171c28;
+    --fg: #e6e8ec;
+    --muted: #9aa1ab;
+    --faint: #6b7280;
+    --border: #2a3247;
+    --border-strong: #36405a;
+    --card: #1b2233;
+    --raised: #1e2638;
+    --row-alt: #1c2436;
+    --ok: #4ade80;
+    --ok-bg: #12291b;
+    --warn: #fbbf24;
+    --warn-bg: #2e2410;
+    --bad: #f87171;
+    --bad-bg: #2e1615;
+    --accent: #7ba7ff;
+    --accent-bg: #16233d;
+    --shadow: 0 1px 3px rgba(0,0,0,.4);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  padding: 20px 18px 28px;
+}
+code, .mono, td.cell, .acct-name, .mini b, .next-life b {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+h1 .title-tag { color: var(--faint); font-weight: 500; font-size: 12px; margin-left: 8px; }
+h2 { font-size: 12.5px; margin: 0 0 10px; font-weight: 650; color: var(--muted);
+     text-transform: uppercase; letter-spacing: .6px; }
+.wrap { max-width: 1100px; margin: 0 auto; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.spacer { flex: 1 1 auto; }
+section { margin-bottom: 20px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* ---------- 按钮 ---------- */
+button {
+  font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 7px;
+  border: 1px solid var(--border-strong); background: var(--raised); color: var(--fg);
+  cursor: pointer; transition: border-color .15s, color .15s;
+}
+button:hover { border-color: var(--accent); color: var(--accent); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.danger:hover { border-color: var(--bad); color: var(--bad); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover { filter: brightness(1.06); color: #fff; }
+button:disabled { cursor: wait; opacity: .65; }
+.toolbar-actions { display: inline-flex; align-items: center; gap: 7px; }
+button.icon-btn {
+  width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center;
+  justify-content: center; flex: none;
+}
+.icon-btn svg { width: 16px; height: 16px; }
+
+/* ---------- 顶栏徽章 ---------- */
+header.bar { margin-bottom: 16px; }
+.badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.badge {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 4px 10px; border-radius: 7px; border: 1px solid var(--border);
+  background: var(--raised); font-size: 12px; box-shadow: var(--shadow);
+}
+.badge span { color: var(--muted); }
+.badge b { font-weight: 650; font-size: 12px; }
+.badge.mode-always b { color: var(--accent); }
+.badge.mode-replace-only b { color: var(--warn); }
+.badge.demo b { color: var(--bad); }
+.badge.on b { color: var(--ok); }
+.badge.off b { color: var(--bad); }
+
+/* ---------- 插件总开关 ---------- */
+.switch { position: relative; display: inline-block; width: 34px; height: 19px; flex: none; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch .slider {
+  position: absolute; inset: 0; border-radius: 999px;
+  background: var(--border-strong); transition: background-color .2s; cursor: pointer;
+}
+.switch .slider::before {
+  content: ""; position: absolute; width: 13px; height: 13px; border-radius: 50%;
+  left: 3px; top: 3px; background: #fff; transition: transform .2s;
+}
+.switch input:checked + .slider { background: var(--ok); }
+.switch input:checked + .slider::before { transform: translateX(15px); }
+.switch input:focus-visible + .slider { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- 采集设置 ---------- */
+.settings-card {
+  margin-bottom: 16px; padding: 14px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--card); box-shadow: var(--shadow);
+}
+.settings-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.settings-head h2 { margin: 0; color: var(--fg); text-transform: none; letter-spacing: 0; font-size: 14px; }
+.settings-summary { margin-top: 2px; color: var(--muted); font-size: 12px; }
+.settings-grid {
+  display: grid; grid-template-columns: minmax(300px, 2fr) minmax(150px, 1fr) minmax(150px, 1fr);
+  gap: 12px;
+}
+.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.field > span { color: var(--muted); font-size: 12px; font-weight: 650; }
+.field input {
+  width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--border-strong);
+  border-radius: 7px; background: var(--raised); color: var(--fg); font: inherit;
+}
+.field input:focus { border-color: var(--accent); outline: 2px solid color-mix(in srgb, var(--accent) 25%, transparent); }
+.field small { min-height: 17px; color: var(--faint); font-size: 11px; }
+.settings-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.settings-actions .spacer { min-width: 8px; }
+.collector-log-panel { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.collector-log-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.collector-log-head b { font-size: 12.5px; }
+.collector-log-storage { color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collector-log-more { margin-left: auto; padding: 3px 9px; font-size: 11px; white-space: nowrap; }
+.collector-log {
+  max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--raised);
+}
+.log-row {
+  display: grid; grid-template-columns: 72px 64px minmax(120px, 1.3fr) minmax(90px, 1fr) minmax(190px, 2fr);
+  gap: 8px; align-items: center; padding: 7px 9px; border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+}
+.log-row:last-child { border-bottom: 0; }
+.log-row.warn { background: var(--warn-bg); }
+.log-time, .log-auth, .log-model, .log-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-time { color: var(--faint); font-variant-numeric: tabular-nums; }
+.log-action { color: var(--accent); font-weight: 650; }
+.log-row.warn .log-action { color: var(--warn); }
+.log-auth, .log-model { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.log-auth { font-weight: 650; }
+.log-detail { color: var(--muted); }
+.log-empty { padding: 16px; color: var(--faint); text-align: center; font-size: 12px; }
+
+@media (max-width: 760px) {
+  .settings-grid { grid-template-columns: 1fr; }
+  .log-row { grid-template-columns: 70px 62px 1fr; }
+  .log-auth { grid-column: 1 / -1; }
+  .log-detail { grid-column: 1 / -1; }
+}
+
+/* ---------- 计数器
+卡片 ---------- */
+.counters { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.counter {
+  background: var(--raised); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; box-shadow: var(--shadow); position: relative; overflow: hidden;
+}
+.counter::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--border-strong);
+}
+.counter.ok::before { background: var(--ok); }
+.counter.warn::before { background: var(--warn); }
+.counter.bad::before { background: var(--bad); }
+.counter .num { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.3px; }
+.counter .lbl { font-size: 12.5px; color: var(--muted); margin-top: 2px; font-weight: 550; }
+.counter .hint { font-size: 11px; color: var(--faint); margin-top: 3px; }
+
+/* ---------- 双层表格 ---------- */
+.tablecard { border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  background: var(--raised); box-shadow: var(--shadow); }
+.tablescroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 960px; table-layout: fixed; }
+col.c-name { width: 22%; }
+col.c-tier { width: 8%; }
+col.c-status { width: 10%; }
+col.c-life { width: 14%; }
+col.c-turn { width: 14%; }
+col.c-time { width: 16%; }
+col.c-actions { width: 16%; }
+thead th {
+  font-size: 11.5px; color: var(--muted); font-weight: 650; text-transform: uppercase;
+  letter-spacing: .5px; background: var(--card); text-align: left;
+  padding: 9px 12px; border-bottom: 1px solid var(--border-strong);
+}
+tbody td { padding: 7px 12px; border-bottom: 1px solid var(--border); font-size: 13px;
+  vertical-align: middle; overflow: hidden; text-overflow: ellipsis; }
+tbody tr:last-child td { border-bottom: none; }
+
+/* 第一层：账号行 —— 四列各自对齐 */
+tr.acct td { background: var(--card); }
+tr.acct td:first-child { padding: 0; }
+tr.acct:hover td { background: var(--accent-bg); }
+tr.acct { cursor: pointer; }
+.acct-btn {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  min-width: 0; white-space: nowrap;
+  background: none; border: none; color: inherit; font: inherit;
+  padding: 10px 12px; cursor: pointer; text-align: left; margin: 0;
+}
+.acct-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.acct-chev { flex: none; display: inline-flex; transition: transform .2s ease; color: var(--muted); }
+tr.acct.open .acct-chev { transform: rotate(90deg); }
+.acct-name { font-weight: 650; font-size: 13px; white-space: nowrap;
+  flex: 1 1 auto; min-width: 0; max-width: 26ch; overflow: hidden; text-overflow: ellipsis; }
+.mini {
+  display: inline-flex; align-items: baseline; gap: 4px;
+  font-size: 11.5px; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px; padding: 1.5px 9px;
+  background: var(--raised); white-space: nowrap;
+}
+.mini b { font-variant-numeric: tabular-nums; font-weight: 650; }
+.mini.full b { color: var(--ok); }
+.mini.some b { color: var(--warn); }
+.mini.none b { color: var(--bad); }
+.next-life { display: inline-flex; align-items: baseline; gap: 5px;
+  font-size: 12px; color: var(--muted); white-space: nowrap; }
+.next-life b { font-weight: 650; color: var(--accent); }
+.life-cell { text-overflow: clip; }
+.acct-hint { font-size: 11px; color: var(--faint); text-align: right; }
+
+/* 第二层：模型行 */
+tr.model { transition: background-color .15s; }
+tr.model:hover td { background: var(--row-alt); }
+tr.model.hidden { display: none; }
+.model-indent { display: inline-flex; align-items: center; gap: 7px; padding-left: 18px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-indent .twig { color: var(--faint); flex: none; }
+.tier-spacer { background: transparent; }
+
+/* turn-state 值列：长度标记 + 缩略值，点击复制 */
+.val-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  width: 100%; justify-content: flex-start; overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11.5px; color: var(--muted); background: none;
+  border: 1px dashed var(--border-strong); border-radius: 6px;
+  padding: 3px 8px; cursor: copy; white-space: nowrap;
+  transition: border-color .15s, color .15s;
+}
+.val-chip:hover { border-color: var(--accent); color: var(--accent); }
+.val-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.val-chip .vlen { font-weight: 700; color: var(--fg); background: var(--card);
+  border-radius: 4px; padding: 0 5px; font-size: 10.5px; flex: none; }
+.val-chip .vlen.degraded { color: var(--warn); }
+.val-chip .vpreview { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.turn-cell { padding-left: 8px; padding-right: 8px; }
+
+/* 操作列 */
+td.acts { padding-left: 6px; padding-right: 6px; text-align: right; white-space: nowrap; }
+button.act {
+  padding: 4px 7px; font-size: 12px; border-radius: 6px; margin-left: 4px;
+  display: inline-flex; align-items: center; gap: 4px; vertical-align: middle;
+}
+button.act svg { width: 13px; height: 13px; }
+button.act.del { color: var(--muted); }
+button.act.del:hover { border-color: var(--bad); color: var(--bad); }
+.mini.tier { background: var(--accent-bg); border-color: var(--accent); }
+.mini.tier b { color: var(--accent); font-weight: 650; }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2.5px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 650;
+}
+.pill .dot { width: 6px; height: 6px; border-radius: 50%; }
+.pill.ready { background: var(--ok-bg); color: var(--ok); }
+.pill.ready .dot { background: var(--ok); animation: pulse 2.4s ease-in-out infinite; }
+.pill.expired { background: var(--bad-bg); color: var(--bad); }
+.pill.expired .dot { background: var(--bad); opacity: .8; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+.lifebar { position: relative; height: 6px; border-radius: 3px; background: var(--card);
+  border: 1px solid var(--border); width: 100%; display: block; }
+.lifebar i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--ok);
+  transition: width .3s ease; }
+.lifebar.low i { background: var(--warn); }
+.lifebar.crit i { background: var(--bad); }
+.life-wrap { display: inline-flex; flex-direction: column; gap: 4px; width: 100%; }
+.life-text { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
+td.time { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+
+@media (max-width: 1000px) {
+  table { min-width: 100%; }
+  col.c-name { width: 21%; }
+  col.c-tier { width: 7%; }
+  col.c-status { width: 9%; }
+  col.c-life { width: 15%; }
+  col.c-turn { width: 14%; }
+  col.c-time { width: 18%; }
+  col.c-actions { width: 16%; }
+  thead th { padding-left: 6px; padding-right: 6px; font-size: 11px; white-space: nowrap; }
+  tbody td { padding-left: 6px; padding-right: 6px; }
+  .acct-btn { gap: 6px; padding-left: 8px; padding-right: 8px; }
+  .mini { padding-left: 6px; padding-right: 6px; font-size: 11px; }
+  .next-life-label { display: none; }
+  .model-indent { gap: 5px; padding-left: 12px; }
+  .turn-cell { padding-left: 5px; padding-right: 5px; }
+  .val-chip { gap: 4px; padding-left: 5px; padding-right: 5px; font-size: 11px; }
+  td.time { font-size: 10.5px; }
+  td.acts { padding-left: 4px; padding-right: 4px; }
+  button.act { gap: 3px; margin-left: 3px; padding: 4px 5px; font-size: 11px; }
+  button.act svg { width: 12px; height: 12px; }
+}
+
+.empty { color: var(--muted); padding: 22px 10px; text-align: center; font-size: 13px; }
+
+#note { font-size: 12.5px; color: var(--muted); margin-top: 10px; min-height: 18px; }
+#note.err { color: var(--bad); }
+
+footer { color: var(--faint); font-size: 12px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="bar">
+  <div class="row">
+    <h1>cpa-plugin-codex-turn-state<span class="title-tag" id="versionTag"></span></h1>
+    <span class="spacer"></span>
+    <span class="toolbar-actions">
+      <button class="icon-btn" id="btnExpandAll" aria-label="全部展开" title="全部展开">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="7 8 12 13 17 8"/><polyline points="7 14 12 19 17 14"/></svg>
+      </button>
+      <button class="icon-btn" id="btnCollapseAll" aria-label="全部折叠" title="全部折叠">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="7 10 12 5 17 10"/><polyline points="7 16 12 11 17 16"/></svg>
+      </button>
+      <button class="icon-btn" id="btnCollectorSettings" aria-label="采集设置" title="采集设置" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.6v-.1A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3V9.6h.1A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1A1.7 1.7 0 0 0 15.5 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.36.36.7.64.96.3.27.68.42 1.08.44H21v4h-.1A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+      </button>
+      <button class="icon-btn" id="btnRefresh" aria-label="刷新" title="刷新">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66"/><polyline points="20 4 20 11 13 11"/></svg>
+      </button>
+      <button class="icon-btn danger" id="btnClear" aria-label="清空缓存" title="清空缓存">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg>
+      </button>
+    </span>
+  </div>
+  <div class="badges" id="badges"></div>
+</header>
+
+<section class="settings-card" id="collectorSettings" aria-labelledby="collectorSettingsTitle" hidden>
+  <div class="settings-head">
+    <div>
+      <h2 id="collectorSettingsTitle">内置采集器</h2>
+      <div class="settings-summary" id="collectorSettingsSummary">未配置专用代理</div>
+    </div>
+    <span class="spacer"></span>
+    <button type="button" id="btnCollectorClose">关闭</button>
+  </div>
+  <form id="collectorSettingsForm">
+    <div class="settings-grid">
+      <label class="field">
+        <span>专用代理 URL</span>
+        <input type="password" id="collectorProxyInput" autocomplete="off" spellcheck="false"
+          placeholder="http://user:pass@代理IP:端口">
+        <small id="collectorProxyHint">支持 http、https、socks5、socks5h；保存后不会回显凭据</small>
+      </label>
+      <label class="field">
+        <span>提前刷新（秒）</span>
+        <input type="number" id="collectorRefreshInput" min="1" max="3599" step="1" required>
+        <small>到期前自动刷新，默认 300 秒</small>
+      </label>
+      <label class="field">
+        <span>失败重试（秒）</span>
+        <input type="number" id="collectorRetryInput" min="1" step="1" required>
+        <small>失败或未采集到时的重试间隔</small>
+      </label>
+    </div>
+    <div class="settings-actions">
+      <button type="submit" class="primary" id="btnCollectorSave">保存设置</button>
+      <button type="button" class="danger" id="btnCollectorClear">清除代理</button>
+      <span class="spacer"></span>
+      <small>配置由 CPA 持久化到 config.yaml，保存后自动重载插件。</small>
+    </div>
+  </form>
+  <div class="collector-log-panel">
+    <div class="collector-log-head">
+      <b>最近采集日志</b>
+      <span class="collector-log-storage" id="collectorLogStorage">日志文件持续追加，不自动轮转或删除</span>
+      <button type="button" class="collector-log-more" id="btnCollectorLogMore" hidden>加载更早</button>
+    </div>
+    <div class="collector-log" id="collectorLog"><div class="log-empty">暂无采集事件</div></div>
+  </div>
+</section>
+
+<section>
+  <div class="tablecard">
+    <div class="tablescroll">
+      <table>
+        <colgroup><col class="c-name"><col class="c-tier"><col class="c-status"><col class="c-life"><col class="c-turn"><col class="c-time"><col class="c-actions"></colgroup>
+        <thead><tr>
+          <th>账号 / 模型</th><th>订阅类型</th><th>状态</th><th>剩余寿命</th><th>turn-state</th><th>签发 / 到期</th><th>操作</th>
+        </tr></thead>
+        <tbody id="tree"></tbody>
+      </table>
+      <div class="empty" id="emptyRow" hidden>暂无缓存条目 — 首个成功响应会自动建立第一条</div>
+    </div>
+  </div>
+</section>
+
+<div id="note"></div>
+<footer>
+  状态数据不含任何 state 值。复制操作才会在内存中短暂请求完整值，密钥不会写入存储。
+</footer>
+
+</div>
+
+<script>
+"use strict";
+
+// #demo 哈希：内置演示数据，用于预览与截图，不发任何请求。
+const DEMO = location.hash === "#demo";
+const PLUGIN_ID = "cpa-plugin-codex-turn-state";
+const PLUGIN_CONFIG_PATH = `/v0/management/plugins/${PLUGIN_ID}/config`;
+
+const state = {
+  key: "",
+  expanded: new Set(),
+  collapsedManually: new Set(),
+  inited: false,
+  pluginEnabled: true, // 页面能被打开即插件在运行；开关改动走 CPA 插件配置
+  latestStatus: null,
+  settingsDirty: false,
+  collectorLogBefore: 0,
+};
+
+const MODE_ZH = { "always": "总是注入", "replace-only": "仅替换降级" };
+const COLLECTOR_ACTION_ZH = {
+  target_discovered: "发现目标",
+  collection_started: "开始采集",
+  collection_succeeded: "采集成功",
+  collection_failed: "采集失败",
+  collector_configured: "配置更新",
+};
+
+const CHEVRON = '<svg class="acct-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>';
+const TWIG = '<svg class="twig" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="5" y1="12" x2="13" y2="12"/><line x1="13" y1="12" x2="19" y2="6"/></svg>';
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]
+  ));
+}
+
+function fmtLife(expiresAt) {
+  const ms = new Date(expiresAt) - Date.now();
+  if (ms <= 0) return { text: "已过期", pct: 0, cls: "crit" };
+  const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);
+  const pct = Math.max(2, Math.min(100, Math.round(ms / 3600000 * 100)));
+  return {
+    text: m >= 1 ? `${m}分${String(s).padStart(2,"0")}秒` : `${s}秒`,
+    pct, cls: pct > 40 ? "" : pct > 15 ? "low" : "crit",
+  };
+}
+
+function renderBadges(data) {
+  const buckets = data.buckets || [];
+  const modeZh = MODE_ZH[data.inject_mode] || data.inject_mode;
+  const ready = buckets.filter(b => b.ready).length;
+
+  const versionTag = document.getElementById("versionTag");
+  if (versionTag && data.version) versionTag.textContent = "v" + data.version;
+
+  const switchHTML = `<label class="switch" title="插件总开关">
+    <input type="checkbox" id="pluginToggle" ${state.pluginEnabled ? "checked" : ""}>
+    <span class="slider"></span>
+  </label>`;
+  let html = `<span class="badge ${state.pluginEnabled ? "on" : "off"}" id="pluginBadge">
+    <span>插件</span><b id="pluginStateText">${state.pluginEnabled ? "启用" : "禁用"}</b>${switchHTML}
+  </span>`;
+  html += `<span class="badge ${data.inject_mode === "always" ? "mode-always" : "mode-replace-only"}"><span>注入模式</span><b>${esc(modeZh)}</b></span>`;
+  html += `<span class="badge"><span>缓存条目</span><b>${ready} / ${buckets.length} 可用</b></span>`;
+  const collector = data.collector || {};
+  html += `<span class="badge ${collector.enabled ? "on" : "off"}"><span>采集器</span><b>${collector.enabled ? `已启用 · ${collector.targets || 0} 目标` : "未配置"}</b></span>`;
+  if (DEMO) html += `<span class="badge demo"><span>演示</span><b>假数据</b></span>`;
+  document.getElementById("badges").innerHTML = html;
+
+  document.getElementById("pluginToggle").addEventListener("change", onPluginToggle);
+}
+
+async function onPluginToggle(ev) {
+  const enable = ev.target.checked;
+  const stateText = document.getElementById("pluginStateText");
+  const badge = document.getElementById("pluginBadge");
+  if (DEMO) {
+    state.pluginEnabled = enable;
+    badge.classList.toggle("on", enable);
+    badge.classList.toggle("off", !enable);
+    stateText.textContent = enable ? "启用" : "禁用";
+    note(enable ? "插件已启用（演示）" : "插件已禁用（演示）", false);
+    return;
+  }
+  if (!enable && !confirm("确定禁用插件？禁用后本页面与状态接口都会停止响应，需重新启用或到 CPAMP 恢复。")) {
+    ev.target.checked = true;
+    return;
+  }
+  try {
+    await call(PLUGIN_CONFIG_PATH, "PATCH", { enabled: enable });
+    state.pluginEnabled = enable;
+    badge.classList.toggle("on", enable);
+    badge.classList.toggle("off", !enable);
+    stateText.textContent = enable ? "启用" : "禁用";
+    note(enable ? "插件已启用" : "插件已禁用（本页在刷新前仍可查看，状态接口将停止更新）", false);
+  } catch (err) {
+    ev.target.checked = !enable;
+    note("切换失败：" + err.message, true);
+  }
+}
+
+function render(data) {
+  state.latestStatus = data;
+  renderBadges(data);
+  syncCollectorSettings(data);
+  renderCollectorLog(data);
+  const buckets = data.buckets || [];
+  const c = data.counters || {};
+  const items = [
+    ["采集模板 (292)",     c.captured || 0,          "",     "成功响应捕获的可用模板数"],
+    ["模板续新",           c.captured_replaced || 0, "ok",   "同一账号模型下新模板覆盖旧值"],
+    ["注入（总是注入）",   c.injected || 0,          "ok",   "总是注入模式下的请求注入次数"],
+    ["降级替换（312→292）", c.substituted || 0,      "warn", "把降级态 312 换成模板的次数"],
+    ["降级观测 (312)",     c.degraded_observed || 0, "bad",  "响应侧观测到的降级态次数"],
+  ];
+  const countersEl = document.getElementById("counters");
+  if (countersEl) countersEl.innerHTML = items.map(([lbl, v, cls, hint]) =>
+    `<div class="counter ${cls}"><div class="num">${v}</div><div class="lbl">${esc(lbl)}</div><div class="hint">${esc(hint)}</div></div>`).join("");
+
+  // ── 双层分组：第一层账号（列对齐），第二层模型 ──
+  const authTier = {};
+  for (const a of (data.auths || [])) authTier[a.auth_id] = a.tier || "";
+  const groups = new Map();
+  for (const b of buckets) {
+    if (!groups.has(b.auth_id)) groups.set(b.auth_id, []);
+    groups.get(b.auth_id).push(b);
+  }
+  // 首次渲染或新账号出现时默认展开；手动折叠过的账号保持折叠
+  for (const auth of groups.keys()) {
+    if (!state.inited || (!state.expanded.has(auth) && !state.collapsedManually.has(auth))) {
+      state.expanded.add(auth);
+    }
+  }
+  state.inited = true;
+
+  let html = "";
+  for (const [auth, models] of groups) {
+    models.sort((a, b) => a.model < b.model ? -1 : 1);
+    const open = state.expanded.has(auth);
+    const ready = models.filter(m => m.ready).length;
+    const cls = ready === models.length ? "full" : ready > 0 ? "some" : "none";
+    const nextExpiry = models.filter(m => m.ready)
+      .map(m => new Date(m.expires_at).getTime()).sort((a, b) => a - b)[0];
+    const nextTxt = nextExpiry ? fmtLife(nextExpiry).text : "—";
+
+    const tier = authTier[auth];
+    html += `<tr class="acct ${open ? "open" : ""}" data-auth="${esc(auth)}">
+      <td class="cell"><button class="acct-btn" aria-expanded="${open}" data-auth="${esc(auth)}">
+        ${CHEVRON}<span class="acct-name" title="${esc(auth)}">${esc(auth)}</span>
+      </button></td>
+      <td class="cell">${tier ? `<span class="mini tier"><b>${esc(tier)}</b></span>` : "—"}</td>
+      <td class="cell"><span class="mini ${cls}"><b>${ready}</b>/${models.length} 就绪</span></td>
+      <td class="cell life-cell"><span class="next-life"><span class="next-life-label">最近到期</span><b>${esc(nextTxt)}</b></span></td>
+      <td class="cell"></td>
+      <td class="cell"></td>
+      <td class="cell acct-hint">${open ? "折叠" : "展开"}</td>
+    </tr>`;
+
+    for (const m of models) {
+      const life = fmtLife(m.expires_at);
+      const pill = m.ready
+        ? `<span class="pill ready"><span class="dot"></span>就绪</span>`
+        : `<span class="pill expired"><span class="dot"></span>过期</span>`;
+    const val = DEMO ? (m.value || "") : "";
+    const vlen = m.len || val.length;
+    const preview = val ? `${val.slice(0, 8)}…${val.slice(-4)}` : (m.ready ? "点击复制" : "—");
+      html += `<tr class="model ${open ? "" : "hidden"}" data-account="${esc(auth)}">
+        <td class="cell"><span class="model-indent">${TWIG}<span>${esc(m.model)}</span></span></td>
+        <td class="cell tier-spacer" aria-hidden="true"></td>
+        <td class="cell">${pill}</td>
+        <td class="cell life-cell"><span class="life-wrap"><span class="lifebar ${life.cls}"><i style="width:${life.pct}%"></i></span><span class="life-text">${esc(life.text)}</span></span></td>
+        <td class="cell turn-cell">${m.ready ? `<button class="val-chip" data-auth="${esc(auth)}" data-model="${esc(m.model)}"${val ? ` data-value="${esc(val)}"` : ""} aria-label="复制完整 turn-state（${vlen} 字符）" title="点击复制完整 turn-state（${vlen} 字符）"><span class="vlen">${vlen}</span><span class="vpreview">${esc(preview)}</span></button>` : "—"}</td>
+        <td class="cell time">${m.issued_at ? esc(new Date(m.issued_at).toLocaleString()) : "-"}<br>${m.expires_at ? esc(new Date(m.expires_at).toLocaleString()) : "-"}</td>
+        <td class="cell acts">
+          <button class="act probe" data-auth="${esc(auth)}" data-model="${esc(m.model)}" aria-label="立刻探测刷新" title="立刻探测刷新：向上游采集新鲜 292">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/></svg>
+          </button>
+          <button class="act del" data-auth="${esc(auth)}" data-model="${esc(m.model)}" aria-label="删除此条缓存" title="删除此条缓存">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </td>
+      </tr>`;
+    }
+  }
+  document.getElementById("tree").innerHTML = html;
+  document.getElementById("emptyRow").hidden = buckets.length > 0;
+}
+
+function note(msg, isErr) {
+  const el = document.getElementById("note");
+  el.textContent = msg;
+  el.className = isErr ? "err" : "";
+}
+
+async function call(path, method, body) {
+  const headers = {};
+  if (state.key) headers["X-Management-Key"] = state.key;
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const resp = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  if (resp.status === 401) {
+    const key = prompt("需要管理密钥（仅保存在当前页面内存）：");
+    if (key) { state.key = key; return call(path, method, body); }
+    throw new Error("未提供管理密钥");
+  }
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const text = await resp.text();
+  return text ? JSON.parse(text) : {};
+}
+
+function syncCollectorSettings(data, force = false) {
+  const collector = data.collector || {};
+  const configured = Boolean(collector.proxy_configured);
+  const summary = document.getElementById("collectorSettingsSummary");
+  const hint = document.getElementById("collectorProxyHint");
+  summary.textContent = configured
+    ? `代理已配置 · ${collector.targets || 0} 个自动采集目标`
+    : "未配置专用代理，自动采集暂未启用";
+  hint.textContent = configured
+    ? "代理已配置；留空表示保持不变，输入新 URL 可替换"
+    : "支持 http、https、socks5、socks5h；保存后不会回显凭据";
+  if (state.settingsDirty && !force) return;
+  document.getElementById("collectorRefreshInput").value = collector.refresh_before_seconds || 300;
+  document.getElementById("collectorRetryInput").value = collector.retry_seconds || 60;
+  document.getElementById("collectorProxyInput").value = "";
+}
+
+function renderCollectorLog(data) {
+  const status = data.collector_log || {};
+  const storage = document.getElementById("collectorLogStorage");
+  storage.textContent = status.error
+    ? `持久化失败：${status.error}`
+    : `日志文件持续追加，不自动轮转或删除 · ${status.path || "等待初始化"}`;
+  const events = data.collector_events || [];
+  const container = document.getElementById("collectorLog");
+  const moreButton = document.getElementById("btnCollectorLogMore");
+  state.collectorLogBefore = Number(status.next_before) || 0;
+  moreButton.hidden = state.collectorLogBefore <= 0;
+  if (!events.length) {
+    container.innerHTML = `<div class="log-empty">暂无采集事件</div>`;
+    return;
+  }
+  container.innerHTML = events.map(collectorLogRow).join("");
+}
+
+async function loadEarlierCollectorLog() {
+  const button = document.getElementById("btnCollectorLogMore");
+  const before = state.collectorLogBefore;
+  if (before <= 0 || button.disabled) return;
+  button.disabled = true;
+  try {
+    let data;
+    if (DEMO) {
+      data = {
+        collector_log: { next_before: 0 },
+        collector_events: [
+          { at: new Date(Date.now() - 120000).toISOString(), level: "info", action: "target_discovered", source: "automatic", auth_id: "codex-delta@work.json", model: "gpt-6-astra", message: "发现自动采集目标" },
+        ],
+      };
+    } else {
+      data = await call(`/v0/management/cpa-plugin-codex-turn-state/status?log_before=${encodeURIComponent(before)}`, "GET");
+    }
+    const events = data.collector_events || [];
+    const page = document.createElement("div");
+    page.innerHTML = events.map(event => collectorLogRow(event)).join("");
+    document.getElementById("collectorLog").append(...page.children);
+    state.collectorLogBefore = Number(data.collector_log && data.collector_log.next_before) || 0;
+    button.hidden = state.collectorLogBefore <= 0;
+    note(events.length ? `已加载 ${events.length} 条更早采集日志` : "没有更早的采集日志", false);
+  } catch (err) {
+    note("加载更早日志失败：" + err.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function collectorLogRow(event) {
+  const time = event.at ? new Date(event.at).toLocaleTimeString([], { hour12: false }) : "--:--:--";
+  const action = COLLECTOR_ACTION_ZH[event.action] || event.action || "事件";
+  const details = [event.message || ""];
+  if (event.status_code) details.push(`HTTP ${event.status_code}`);
+  if (event.state_length) details.push(`长度 ${event.state_length}`);
+  if (event.retry_in_seconds) details.push(`${event.retry_in_seconds} 秒后重试`);
+  return `<div class="log-row ${event.level === "warn" || event.level === "error" ? "warn" : ""}">
+    <span class="log-time">${esc(time)}</span>
+    <span class="log-action">${esc(action)}</span>
+    <span class="log-auth" title="${esc(event.auth_id || "—")}">${esc(event.auth_id || "—")}</span>
+    <span class="log-model" title="${esc(event.model || "—")}">${esc(event.model || "—")}</span>
+    <span class="log-detail" title="${esc(details.join(" · "))}">${esc(details.join(" · "))}</span>
+  </div>`;
+}
+
+function setCollectorSettingsOpen(open) {
+  const panel = document.getElementById("collectorSettings");
+  const button = document.getElementById("btnCollectorSettings");
+  panel.hidden = !open;
+  button.setAttribute("aria-expanded", String(open));
+  if (open && state.latestStatus) {
+    state.settingsDirty = false;
+    syncCollectorSettings(state.latestStatus, true);
+    document.getElementById("collectorProxyInput").focus();
+  }
+}
+
+function collectorSettingsPayload() {
+  const proxyInput = document.getElementById("collectorProxyInput");
+  const proxy = proxyInput.value.trim();
+  const refreshBefore = Number(document.getElementById("collectorRefreshInput").value);
+  const retry = Number(document.getElementById("collectorRetryInput").value);
+  if (!Number.isInteger(refreshBefore) || refreshBefore < 1 || refreshBefore >= 3600) {
+    throw new Error("提前刷新必须是 1 到 3599 秒的整数");
+  }
+  if (!Number.isInteger(retry) || retry < 1) {
+    throw new Error("失败重试必须是大于 0 的整数");
+  }
+  const payload = {
+    collector_refresh_before_seconds: refreshBefore,
+    collector_retry_seconds: retry,
+  };
+  if (proxy) {
+    let parsed;
+    try { parsed = new URL(proxy); }
+    catch { throw new Error("代理 URL 格式不正确"); }
+    if (!["http:", "https:", "socks5:", "socks5h:"].includes(parsed.protocol) || !parsed.hostname) {
+      throw new Error("代理仅支持 http、https、socks5、socks5h");
+    }
+    payload.collector_proxy_url = proxy;
+  }
+  return payload;
+}
+
+async function saveCollectorSettings(ev) {
+  ev.preventDefault();
+  const button = document.getElementById("btnCollectorSave");
+  let payload;
+  try { payload = collectorSettingsPayload(); }
+  catch (err) { note("设置无效：" + err.message, true); return; }
+  button.disabled = true;
+  try {
+    if (DEMO) {
+      const collector = state.latestStatus.collector;
+      collector.refresh_before_seconds = payload.collector_refresh_before_seconds;
+      collector.retry_seconds = payload.collector_retry_seconds;
+      if (payload.collector_proxy_url) collector.enabled = collector.proxy_configured = true;
+      render(state.latestStatus);
+      note("采集设置已保存（演示）", false);
+    } else {
+      await call(PLUGIN_CONFIG_PATH, "PATCH", payload);
+      note("采集设置已持久化，插件正在自动重载", false);
+      setTimeout(refresh, 800);
+    }
+    state.settingsDirty = false;
+    document.getElementById("collectorProxyInput").value = "";
+  } catch (err) { note("保存失败：" + err.message, true); }
+  finally { button.disabled = false; }
+}
+
+async function clearCollectorProxy() {
+  const collector = state.latestStatus && state.latestStatus.collector || {};
+  if (!collector.proxy_configured) { note("当前没有已配置的采集代理", true); return; }
+  if (!DEMO && !confirm("清除专用采集代理？清除后自动采集会停止。")) return;
+  const button = document.getElementById("btnCollectorClear");
+  button.disabled = true;
+  try {
+    if (DEMO) {
+      collector.enabled = collector.proxy_configured = false;
+      collector.targets = 0;
+      render(state.latestStatus);
+      note("采集代理已清除（演示）", false);
+    } else {
+      await call(PLUGIN_CONFIG_PATH, "PATCH", { collector_proxy_url: null });
+      note("采集代理已清除，插件正在自动重载", false);
+      setTimeout(refresh, 800);
+    }
+    state.settingsDirty = false;
+    document.getElementById("collectorProxyInput").value = "";
+  } catch (err) { note("清除失败：" + err.message, true); }
+  finally { button.disabled = false; }
+}
+
+async function refresh() {
+  if (DEMO) { render(demoData()); note("演示模式（#demo）：展示用假数据，不发请求", false); return; }
+  try {
+    render(await call("/v0/management/cpa-plugin-codex-turn-state/status", "GET"));
+    note("");
+  } catch (err) { note("获取状态失败：" + err.message, true); }
+}
+
+// 表格事件委托：值复制 / 操作按钮 / 账号折叠
+document.getElementById("tree").addEventListener("click", ev => {
+  const chip = ev.target.closest(".val-chip");
+  if (chip) { copyValue(chip); return; }
+  const act = ev.target.closest("button.act");
+  if (act) {
+    if (act.classList.contains("probe")) probeBucket(act.dataset.auth, act.dataset.model, act);
+    else deleteBucket(act.dataset.auth, act.dataset.model);
+    return;
+  }
+  const tr = ev.target.closest("tr.acct");
+  if (!tr) return;
+  const auth = tr.dataset.auth;
+  const open = !state.expanded.has(auth);
+  if (open) state.expanded.add(auth);
+  else { state.expanded.delete(auth); state.collapsedManually.add(auth); }
+  tr.classList.toggle("open", open);
+  const btn = tr.querySelector(".acct-btn");
+  if (btn) btn.setAttribute("aria-expanded", String(open));
+  tr.parentElement.querySelectorAll(`tr.model[data-account="${CSS.escape(auth)}"]`)
+    .forEach(row => row.classList.toggle("hidden", !open));
+  tr.querySelector(".acct-hint").textContent = open ? "折叠" : "展开";
+});
+
+async function copyValue(chip) {
+  let value = chip.dataset.value || "";
+  try {
+    if (!value && !DEMO) {
+      const response = await call("/v0/management/cpa-plugin-codex-turn-state/buckets/reveal", "POST", {
+        auth_id: chip.dataset.auth,
+        model: chip.dataset.model,
+      });
+      value = response.value || "";
+    }
+    if (!value) throw new Error("缓存值不可用");
+    await navigator.clipboard.writeText(value);
+    note(`已复制 ${value.length} 字符 turn-state`, false);
+  } catch {
+    // 剪贴板 API 被拒绝时的兜底：选中文本让用户手动 Ctrl+C
+    const range = document.createRange();
+    range.selectNodeContents(chip);
+    const sel = getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    note("无法访问剪贴板，已选中内容，请手动复制", true);
+  }
+}
+
+async function probeBucket(auth, model, btn) {
+  if (btn.disabled) return;
+  btn.disabled = true;
+  if (DEMO) {
+    note(`（演示）探测 ${auth} × ${model}：模拟采集到新鲜 292 模板`, false);
+    setTimeout(() => { btn.disabled = false; }, 600);
+    return;
+  }
+  note(`正在探测 ${auth} × ${model} …（向上游发一条最小请求，消耗少量额度）`);
+  try {
+    const r = await call("/v0/management/cpa-plugin-codex-turn-state/buckets/probe", "POST", { auth_id: auth, model });
+    if (r.harvested) note(`探测成功：已采集新鲜 292 模板（上游状态 ${r.status_code}）`, false);
+    else if (r.reached) note(`探测到达上游（${r.status_code}）但未采集到模板${r.note ? "：" + r.note : ""}`, true);
+    else note(`探测失败：${r.error || "未知错误"}`, true);
+    await refresh();
+  } catch (err) { note("探测失败：" + err.message, true); }
+  finally { btn.disabled = false; }
+}
+
+async function deleteBucket(auth, model) {
+  if (!confirm(`删除 ${auth} × ${model} 的缓存条目？下一个成功响应会自动重建。`)) return;
+  if (DEMO) { note("演示模式下删除不可用", true); return; }
+  try {
+    await call("/v0/management/cpa-plugin-codex-turn-state/buckets/delete", "POST", { auth_id: auth, model });
+    await refresh();
+    note(`已删除 ${auth} × ${model}`, false);
+  } catch (err) { note("删除失败：" + err.message, true); }
+}
+
+document.getElementById("btnExpandAll").addEventListener("click", () => {
+  state.collapsedManually.clear();
+  document.querySelectorAll("#tree tr.acct").forEach(tr => {
+    state.expanded.add(tr.dataset.auth);
+    tr.classList.add("open");
+    const btn = tr.querySelector(".acct-btn");
+    if (btn) btn.setAttribute("aria-expanded", "true");
+    tr.querySelector(".acct-hint").textContent = "折叠";
+  });
+  document.querySelectorAll("#tree tr.model").forEach(row => row.classList.remove("hidden"));
+});
+
+document.getElementById("btnCollapseAll").addEventListener("click", () => {
+  document.querySelectorAll("#tree tr.acct").forEach(tr => {
+    state.expanded.delete(tr.dataset.auth);
+    state.collapsedManually.add(tr.dataset.auth);
+    tr.classList.remove("open");
+    const btn = tr.querySelector(".acct-btn");
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    tr.querySelector(".acct-hint").textContent = "展开";
+  });
+  document.querySelectorAll("#tree tr.model").forEach(row => row.classList.add("hidden"));
+});
+
+document.getElementById("btnRefresh").addEventListener("click", refresh);
+document.getElementById("btnCollectorSettings").addEventListener("click", () => {
+  setCollectorSettingsOpen(document.getElementById("collectorSettings").hidden);
+});
+document.getElementById("btnCollectorClose").addEventListener("click", () => setCollectorSettingsOpen(false));
+document.getElementById("btnCollectorLogMore").addEventListener("click", loadEarlierCollectorLog);
+document.getElementById("collectorSettingsForm").addEventListener("submit", saveCollectorSettings);
+document.getElementById("btnCollectorClear").addEventListener("click", clearCollectorProxy);
+document.querySelectorAll("#collectorSettings input").forEach(input => {
+  input.addEventListener("input", () => { state.settingsDirty = true; });
+});
+document.getElementById("btnClear").addEventListener("click", async () => {
+  if (DEMO) { note("演示模式下清空不可用", true); return; }
+  if (!confirm("清空全部缓存模板？下一个成功响应会自动重建。")) return;
+  try {
+    await call("/v0/management/cpa-plugin-codex-turn-state/cache/clear", "POST");
+    await refresh();
+    note("缓存已清空");
+  } catch (err) { note("清空失败：" + err.message, true); }
+});
+
+function demoData() {
+  const now = Date.now();
+  // 造一条形似 Fernet 的假值（gAAAAAB 开头），仅用于演示，不含任何真实密文。
+  const turnstateLen = 292;
+  const fakeVal = seed => {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let h = 0;
+    for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+    let s = "gAAAAAB";
+    while (s.length < turnstateLen - 4) { h = (h * 1103515245 + 12345) >>> 0; s += chars[h % 64]; }
+    return s + "AQID";
+  };
+  const bucket = (auth, model, minIssued, minExpires) => {
+    const value = fakeVal(auth + model);
+    return {
+      auth_id: auth, model,
+      ready: minExpires > 0,
+      len: value.length,
+      value,
+      issued_at: new Date(now + minIssued * 60000).toISOString(),
+      expires_at: new Date(now + minExpires * 60000).toISOString(),
+    };
+  };
+  return {
+    plugin: "cpa-plugin-codex-turn-state", version: "0.3.0", inject_mode: "replace-only",
+    generated_at: new Date(now).toISOString(),
+    collector: { enabled: true, proxy_configured: true, targets: 4, refresh_before_seconds: 300, retry_seconds: 60 },
+    collector_log: { path: "data/codex-turn-state-cache/collector-events.jsonl", append_only: true, next_before: 1 },
+    collector_events: [
+      { at: new Date(now - 15000).toISOString(), level: "info", action: "collection_succeeded", source: "automatic", auth_id: "codex-alpha@outlook.json", model: "gpt-6-astra", status_code: 200, state_length: 292, message: "已采集并缓存新鲜 292 模板" },
+      { at: new Date(now - 45000).toISOString(), level: "warn", action: "collection_failed", source: "automatic", auth_id: "codex-beta@outlook.json", model: "gpt-5.6-sol", status_code: 429, retry_in_seconds: 60, message: "上游返回非成功状态" },
+      { at: new Date(now - 60000).toISOString(), level: "info", action: "collection_started", source: "manual", auth_id: "codex-gamma@gmail.json", model: "gpt-5.5", message: "开始手动探测采集" },
+    ],
+    counters: { captured: 1483, captured_replaced: 962, injected: 0, substituted: 231, degraded_observed: 57 },
+    auths: [
+      { auth_id: "codex-alpha@outlook.json", tier: "pro" },
+      { auth_id: "codex-beta@outlook.json",  tier: "team" },
+      { auth_id: "codex-gamma@gmail.json",   tier: "plus" },
+      { auth_id: "codex-delta@work.json",    tier: "pro" },
+      { auth_id: "codex-epsilon@team.json",  tier: "free" },
+    ],
+    buckets: [
+      bucket("codex-alpha@outlook.json",  "gpt-6-astra",   -12,  48),
+      bucket("codex-alpha@outlook.json",  "gpt-5.6-sol",   -46,  14),
+      bucket("codex-alpha@outlook.json",  "gpt-5.6-luna",  -30,  30),
+      bucket("codex-beta@outlook.json",   "gpt-5.5",       -52,   8),
+      bucket("codex-beta@outlook.json",   "gpt-5.6-terra", -70, -10),
+      bucket("codex-beta@outlook.json",   "gpt-6-astra",   -5,   55),
+      bucket("codex-gamma@gmail.json",    "gpt-5.5",       -18,  42),
+      bucket("codex-gamma@gmail.json",    "gpt-5.6-sol",   -58,   2),
+      bucket("codex-delta@work.json",     "gpt-6-astra",   -40,  20),
+      bucket("codex-epsilon@team.json",   "gpt-5.5",       -66,  -6),
+    ],
+  };
+}
+
+refresh();
+setInterval(() => { if (state.inited) refresh(); }, 30000);
+</script>
+</body>
+</html>

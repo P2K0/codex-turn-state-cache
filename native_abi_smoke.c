@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct {
     void *ptr;
@@ -124,8 +125,32 @@ static int expect_log(const char *stage, const char *must_contain, const char *m
 }
 
 static void make_state(char state[293], char value) {
-    memset(state, value, 292);
-    state[292] = '\0';
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    uint8_t raw[217] = {0};
+    uint64_t issued = (uint64_t)time(NULL) - 60;
+    raw[0] = 0x80;
+    for (int i = 0; i < 8; i++) {
+        raw[1 + i] = (uint8_t)(issued >> (8 * (7 - i)));
+    }
+    for (size_t i = 9; i < sizeof(raw); i++) {
+        raw[i] = (uint8_t)i ^ (uint8_t)value;
+    }
+    size_t in = 0;
+    size_t out = 0;
+    while (in + 3 <= sizeof(raw)) {
+        uint32_t block = ((uint32_t)raw[in] << 16) | ((uint32_t)raw[in + 1] << 8) | raw[in + 2];
+        state[out++] = alphabet[(block >> 18) & 63];
+        state[out++] = alphabet[(block >> 12) & 63];
+        state[out++] = alphabet[(block >> 6) & 63];
+        state[out++] = alphabet[block & 63];
+        in += 3;
+    }
+    uint32_t tail = (uint32_t)raw[in] << 16;
+    state[out++] = alphabet[(tail >> 18) & 63];
+    state[out++] = alphabet[(tail >> 12) & 63];
+    state[out++] = '=';
+    state[out++] = '=';
+    state[out] = '\0';
 }
 
 int main(int argc, char **argv) {
