@@ -1,2 +1,6 @@
 dist/
 *.h
+data/
+graphify-out/
+.DS_Store
+release/
