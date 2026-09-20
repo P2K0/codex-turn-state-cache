@@ -206,6 +206,21 @@ The GitHub Release supports Linux/amd64 only. Its zip asset is named
 `codex-turn-state-cache.so` at the archive root, and is verified by the
 adjacent `checksums.txt` file.
 
+## GitHub Actions
+
+Every push to `main` and every pull request runs the Go tests, `go vet`,
+Linux/amd64 compilation, and the native ABI smoke test. To publish a release,
+push a tag whose version matches `pluginVersion` in `cmd/plugin/main.go`:
+
+```bash
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+The tag workflow builds the plugin, packages the release zip and
+`checksums.txt`, uploads the build artifact, and creates a GitHub Release with
+generated notes.
+
 ## Design notes
 
 - Design comparison against the article's keeper-based architecture and the
