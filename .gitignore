@@ -4,3 +4,6 @@ data/
 graphify-out/
 .DS_Store
 release/
+.idea/
+.omx/
+.superpowers/
